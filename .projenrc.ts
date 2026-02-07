@@ -11,14 +11,14 @@ const project = new typescript.TypeScriptProject({
     '@aws-sdk/client-athena@^3.983.0',
     'athena-query-result-parser@^0.1.5',
   ],
-  releaseToNpm: false,
+  releaseToNpm: true,
   npmAccess: javascript.NpmAccess.PUBLIC,
   minNodeVersion: '20.0.0',
   workflowNodeVersion: '24.x',
   depsUpgradeOptions: {
     workflowOptions: {
       labels: ['auto-approve', 'auto-merge'],
-      // schedule: javascript.UpgradeDependenciesSchedule.expressions(['15 16 * * 5']),
+      schedule: javascript.UpgradeDependenciesSchedule.WEEKLY,
     },
   },
   githubOptions: {
