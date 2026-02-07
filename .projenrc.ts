@@ -12,6 +12,7 @@ const project = new typescript.TypeScriptProject({
     'athena-query-result-parser@^0.1.5',
   ],
   releaseToNpm: true,
+  npmTrustedPublishing: true,
   npmAccess: javascript.NpmAccess.PUBLIC,
   minNodeVersion: '20.0.0',
   workflowNodeVersion: '24.x',
