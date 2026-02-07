@@ -47,6 +47,10 @@
     "ts-node": "^10.9.2",
     "typescript": "5.9.x"
   },
+  "dependencies": {
+    "@aws-sdk/client-athena": "^3.983.0",
+    "athena-query-result-parser": "^0.1.5"
+  },
   "engines": {
     "node": ">= 20.0.0"
   },

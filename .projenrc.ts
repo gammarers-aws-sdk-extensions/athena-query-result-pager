@@ -7,6 +7,10 @@ const project = new typescript.TypeScriptProject({
   projenrcTs: true,
   typescriptVersion: '5.9.x',
   repository: 'https://github.com/gammarers-aws-sdk-extensions/athena-query-result-pager.git',
+  deps: [
+    '@aws-sdk/client-athena@^3.983.0',
+    'athena-query-result-parser@^0.1.5',
+  ],
   releaseToNpm: false,
   npmAccess: javascript.NpmAccess.PUBLIC,
   minNodeVersion: '20.0.0',
