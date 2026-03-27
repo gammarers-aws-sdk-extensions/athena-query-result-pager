@@ -1,6 +1,19 @@
 # Athena Query Result Pager
 
-Paginate AWS Athena query results with the AWS SDK v3. Fetches results page by page and supports raw rows or custom row parsing via [athena-query-result-parser](https://www.npmjs.com/package/athena-query-result-parser).
+![npm](https://img.shields.io/npm/v/athena-query-result-pager)
+![license](https://img.shields.io/npm/l/athena-query-result-pager)
+
+Paginate AWS Athena query results with AWS SDK v3. This package fetches results page by page and supports raw rows or custom row parsing via [athena-query-result-parser](https://www.npmjs.com/package/athena-query-result-parser).
+
+## Features
+
+- Paginates Athena `GetQueryResults` responses with `nextToken`.
+- Supports raw rows (`ParsedRow`) and custom typed row parsing.
+- Provides async generators for page-by-page and row-by-row iteration.
+- Includes fail-fast input validation:
+  - `maxResults` must be an integer in `1..1000`.
+  - `queryExecutionId` must be a non-empty string.
+- Exposes a simple static utility: `AthenaQueryResultPager.hasNextPage(...)`.
 
 ## Installation
 
@@ -8,13 +21,15 @@ Paginate AWS Athena query results with the AWS SDK v3. Fetches results page by p
 npm install athena-query-result-pager
 ```
 
-**Peer dependencies:** `@aws-sdk/client-athena`, `athena-query-result-parser` (installed automatically if missing).
+```bash
+yarn add athena-query-result-pager
+```
 
-**Requirements:** Node.js >= 20.
+Dependencies: `@aws-sdk/client-athena`, `athena-query-result-parser`.
 
 ## Usage
 
-### Create a pager
+### Create a pager instance
 
 ```ts
 import { AthenaClient } from '@aws-sdk/client-athena';
@@ -22,12 +37,12 @@ import { AthenaQueryResultPager } from 'athena-query-result-pager';
 
 const client = new AthenaClient({ region: 'us-east-1' });
 const pager = new AthenaQueryResultPager(client, {
-  maxResults: 1000,        // optional, default: 1000
-  queryResultType: 'DATA_ROWS',  // optional, default: 'DATA_ROWS'
+  maxResults: 1000,
+  queryResultType: 'DATA_ROWS',
 });
 ```
 
-### Fetch a single page (raw rows)
+### Fetch one page (raw rows)
 
 ```ts
 const page = await pager.fetchPage('query-execution-id');
@@ -39,7 +54,7 @@ if (AthenaQueryResultPager.hasNextPage(page)) {
 }
 ```
 
-### Fetch a single page with a custom row parser
+### Fetch one page with a custom row parser
 
 ```ts
 import type { RowParser } from 'athena-query-result-pager';
@@ -84,6 +99,24 @@ When processing a different query with the same pager instance, reset the parser
 pager.reset();
 ```
 
+## Options
+
+### `PagerOptions`
+
+- `maxResults?: number`
+  - Default: `1000`
+  - Valid range: integer `1..1000` (Athena limit)
+  - Throws `RangeError` when invalid
+- `queryResultType?: 'DATA_ROWS'`
+  - Default: `'DATA_ROWS'`
+
+### Method input validation
+
+- `fetchPage(queryExecutionId, nextToken?)`
+- `fetchPageWith(queryExecutionId, rowParser, nextToken?)`
+
+Both methods throw an error if `queryExecutionId` is empty or whitespace only.
+
 ## API
 
 ### `AthenaQueryResultPager`
@@ -103,6 +136,11 @@ pager.reset();
 - **`PagerOptions`** — `{ maxResults?: number; queryResultType?: 'DATA_ROWS' }`
 - **`ParsedRow`**, **`RowParser<T>`** — re-exported from `athena-query-result-parser`.
 
+## Requirements
+
+- Node.js `>= 20.0.0`
+- AWS SDK v3 client: `@aws-sdk/client-athena`
+
 ## License
 
-This project is licensed under the Apache-2.0 License.
+This project is licensed under the (Apache-2.0) License.
