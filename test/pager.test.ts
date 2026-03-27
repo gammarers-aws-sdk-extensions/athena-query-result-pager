@@ -6,7 +6,9 @@ import {
   type ParsedRow,
 } from '../src';
 
-function createMockResultSet(rows: Array<Record<string, string | null>>): GetQueryResultsCommandOutput['ResultSet'] {
+const createMockResultSet = (
+  rows: Array<Record<string, string | null>>,
+): GetQueryResultsCommandOutput['ResultSet'] => {
   if (rows.length === 0) {
     return {
       ResultSetMetadata: { ColumnInfo: [] },
@@ -22,11 +24,11 @@ function createMockResultSet(rows: Array<Record<string, string | null>>): GetQue
       Data: columns.map((col) => ({ VarCharValue: r[col] ?? undefined })),
     })),
   };
-}
+};
 
-function createMockSend(
+const createMockSend = (
   pages: Array<{ rows: ParsedRow[]; nextToken?: string }>,
-): jest.Mock {
+): jest.Mock => {
   const send = jest.fn();
   let callIndex = 0;
   send.mockImplementation(() => {
@@ -54,17 +56,17 @@ function createMockSend(
     });
   });
   return send;
-}
+};
 
 describe('AthenaQueryResultPager', () => {
   describe('constructor', () => {
-    it('requires AthenaClient and accepts optional options', () => {
+    it('should require AthenaClient and accept optional options', () => {
       const client = { send: jest.fn() } as unknown as AthenaClient;
       const pager = new AthenaQueryResultPager(client);
       expect(pager).toBeDefined();
     });
 
-    it('uses default options when not provided', async () => {
+    it('should use default options when not provided', async () => {
       const client = { send: jest.fn().mockResolvedValue({ ResultSet: createMockResultSet([]), NextToken: undefined }) } as unknown as AthenaClient;
       const pager = new AthenaQueryResultPager(client);
       await pager.fetchPage('exec-1');
@@ -79,7 +81,7 @@ describe('AthenaQueryResultPager', () => {
       );
     });
 
-    it('applies custom maxResults and queryResultType', async () => {
+    it('should apply custom maxResults and queryResultType', async () => {
       const client = { send: jest.fn().mockResolvedValue({ ResultSet: createMockResultSet([]), NextToken: undefined }) } as unknown as AthenaClient;
       const pager = new AthenaQueryResultPager(client, {
         maxResults: 100,
@@ -94,10 +96,17 @@ describe('AthenaQueryResultPager', () => {
         }),
       );
     });
+
+    it.each([0, -1, 1001, 1.5])('should throw RangeError when maxResults is invalid: %p', (maxResults) => {
+      const client = { send: jest.fn() } as unknown as AthenaClient;
+      expect(() => new AthenaQueryResultPager(client, { maxResults })).toThrow(
+        'options.maxResults must be an integer between 1 and 1000',
+      );
+    });
   });
 
   describe('fetchPage', () => {
-    it('calls GetQueryResults with queryExecutionId and nextToken', async () => {
+    it('should call GetQueryResults with queryExecutionId and nextToken', async () => {
       const send = createMockSend([{ rows: [{ id: '1', name: 'a' }], nextToken: undefined }]);
       const client = { send } as unknown as AthenaClient;
       const pager = new AthenaQueryResultPager(client);
@@ -118,7 +127,7 @@ describe('AthenaQueryResultPager', () => {
       expect(result.rowCount).toBe(1);
     });
 
-    it('passes nextToken for subsequent pages', async () => {
+    it('should pass nextToken for subsequent pages', async () => {
       const send = createMockSend([
         { rows: [{ id: '1' }], nextToken: 'token-2' },
         { rows: [{ id: '2' }], nextToken: undefined },
@@ -135,10 +144,19 @@ describe('AthenaQueryResultPager', () => {
       expect(send.mock.calls[1][0].input.NextToken).toBe('token-2');
       expect(page2.nextToken).toBeUndefined();
     });
+
+    it('should throw when queryExecutionId is empty or whitespace only', async () => {
+      const client = { send: jest.fn() } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+
+      await expect(pager.fetchPage('')).rejects.toThrow('queryExecutionId must be a non-empty string');
+      await expect(pager.fetchPage('   ')).rejects.toThrow('queryExecutionId must be a non-empty string');
+      expect(client.send).not.toHaveBeenCalled();
+    });
   });
 
   describe('fetchPageWith', () => {
-    it('parses rows with custom row parser', async () => {
+    it('should parse rows with custom row parser', async () => {
       const send = createMockSend([
         {
           rows: [
@@ -164,10 +182,20 @@ describe('AthenaQueryResultPager', () => {
       expect(result.rowCount).toBe(2);
       expect(result.nextToken).toBeUndefined();
     });
+
+    it('should throw when queryExecutionId is empty or whitespace only', async () => {
+      const client = { send: jest.fn() } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+      const rowParser = (row: ParsedRow): ParsedRow => row;
+
+      await expect(pager.fetchPageWith('', rowParser)).rejects.toThrow('queryExecutionId must be a non-empty string');
+      await expect(pager.fetchPageWith('   ', rowParser)).rejects.toThrow('queryExecutionId must be a non-empty string');
+      expect(client.send).not.toHaveBeenCalled();
+    });
   });
 
   describe('iteratePages', () => {
-    it('yields one page when there is no nextToken', async () => {
+    it('should yield one page when there is no nextToken', async () => {
       const send = createMockSend([{ rows: [{ x: '1' }], nextToken: undefined }]);
       const client = { send } as unknown as AthenaClient;
       const pager = new AthenaQueryResultPager(client);
@@ -183,7 +211,7 @@ describe('AthenaQueryResultPager', () => {
       expect(send).toHaveBeenCalledTimes(1);
     });
 
-    it('yields multiple pages until nextToken is undefined', async () => {
+    it('should yield multiple pages until nextToken is undefined', async () => {
       const send = createMockSend([
         { rows: [{ x: '1' }], nextToken: 't2' },
         { rows: [{ x: '2' }], nextToken: 't3' },
@@ -207,7 +235,7 @@ describe('AthenaQueryResultPager', () => {
   });
 
   describe('iteratePagesWith', () => {
-    it('yields pages with custom parsed rows', async () => {
+    it('should yield pages with custom parsed rows', async () => {
       const send = createMockSend([
         { rows: [{ id: '1' }], nextToken: undefined },
       ]);
@@ -227,7 +255,7 @@ describe('AthenaQueryResultPager', () => {
   });
 
   describe('iterateRows', () => {
-    it('yields each row from all pages', async () => {
+    it('should yield each row from all pages', async () => {
       const send = createMockSend([
         { rows: [{ id: '1' }, { id: '2' }], nextToken: 't2' },
         { rows: [{ id: '3' }], nextToken: undefined },
@@ -247,7 +275,7 @@ describe('AthenaQueryResultPager', () => {
   });
 
   describe('reset', () => {
-    it('recreates parser instance', async () => {
+    it('should recreate parser instance', async () => {
       const send = createMockSend([
         { rows: [{ a: '1' }], nextToken: undefined },
         { rows: [{ b: '2' }], nextToken: undefined },
@@ -265,11 +293,11 @@ describe('AthenaQueryResultPager', () => {
   });
 
   describe('hasNextPage', () => {
-    it('returns true when nextToken is defined', () => {
+    it('should return true when nextToken is defined', () => {
       expect(AthenaQueryResultPager.hasNextPage({ rows: [], nextToken: 'x', rowCount: 0 })).toBe(true);
     });
 
-    it('returns false when nextToken is undefined', () => {
+    it('should return false when nextToken is undefined', () => {
       expect(AthenaQueryResultPager.hasNextPage({ rows: [], rowCount: 0 })).toBe(false);
       expect(AthenaQueryResultPager.hasNextPage({ rows: [], nextToken: undefined, rowCount: 0 })).toBe(false);
     });

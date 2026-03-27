@@ -8,8 +8,8 @@ const project = new typescript.TypeScriptProject({
   typescriptVersion: '5.9.x',
   repository: 'https://github.com/gammarers-aws-sdk-extensions/athena-query-result-pager.git',
   deps: [
-    '@aws-sdk/client-athena@^3.983.0',
-    'athena-query-result-parser@^0.1.5',
+    '@aws-sdk/client-athena@^3',
+    'athena-query-result-parser@^0.2',
   ],
   releaseToNpm: true,
   npmTrustedPublishing: true,

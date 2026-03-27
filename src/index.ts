@@ -3,6 +3,9 @@ import { AthenaQueryResultParser, type ParsedRow, type RowParser } from 'athena-
 
 /** Default maximum number of rows per page. */
 const DEFAULT_MAX_RESULTS = 1000;
+/** Minimum and maximum allowed by Athena GetQueryResults. */
+const MIN_MAX_RESULTS = 1;
+const MAX_MAX_RESULTS = 1000;
 
 /** Default query result type for GetQueryResults. */
 const DEFAULT_QUERY_RESULT_TYPE = 'DATA_ROWS' as const;
@@ -48,9 +51,16 @@ export class AthenaQueryResultPager {
   private parser: AthenaQueryResultParser;
 
   constructor(client: AthenaClient, options: PagerOptions = {}) {
+    const maxResults = options.maxResults ?? DEFAULT_MAX_RESULTS;
+    if (!Number.isInteger(maxResults) || maxResults < MIN_MAX_RESULTS || maxResults > MAX_MAX_RESULTS) {
+      throw new RangeError(
+        `options.maxResults must be an integer between ${MIN_MAX_RESULTS} and ${MAX_MAX_RESULTS}, got ${String(maxResults)}`,
+      );
+    }
+
     this.client = client;
     this.options = {
-      maxResults: options.maxResults ?? DEFAULT_MAX_RESULTS,
+      maxResults,
       queryResultType: options.queryResultType ?? DEFAULT_QUERY_RESULT_TYPE,
     };
     this.parser = new AthenaQueryResultParser();
@@ -66,6 +76,10 @@ export class AthenaQueryResultPager {
     queryExecutionId: string,
     nextToken?: string,
   ): Promise<PageResult<ParsedRow>> {
+    if (queryExecutionId.trim() === '') {
+      throw new Error('queryExecutionId must be a non-empty string');
+    }
+
     const input: GetQueryResultsCommandInput = {
       QueryExecutionId: queryExecutionId,
       NextToken: nextToken,
@@ -95,6 +109,10 @@ export class AthenaQueryResultPager {
     rowParser: RowParser<T>,
     nextToken?: string,
   ): Promise<PageResult<T>> {
+    if (queryExecutionId.trim() === '') {
+      throw new Error('queryExecutionId must be a non-empty string');
+    }
+
     const input: GetQueryResultsCommandInput = {
       QueryExecutionId: queryExecutionId,
       NextToken: nextToken,
