@@ -40,7 +40,7 @@
     "@smithy/util-utf8" "^2.0.0"
     tslib "^2.6.2"
 
-"@aws-sdk/client-athena@^3", "@aws-sdk/client-athena@^3.983.0":
+"@aws-sdk/client-athena@^3.983.0":
   version "3.1041.0"
   resolved "https://registry.yarnpkg.com/@aws-sdk/client-athena/-/client-athena-3.1041.0.tgz#dab72e3eb712fcd6fb211f4d83c9ca0ea93777c9"
   integrity sha512-rBOASpnWrfjKGf68kS/8pNHGCnHuRlabQOi1gqvPFZICY382f2dWCzuXetiPt1ETJUdaLDNrhRYaaTg2W4DJfA==
@@ -2172,10 +2172,10 @@ async-function@^1.0.0:
   resolved "https://registry.yarnpkg.com/async-function/-/async-function-1.0.0.tgz#509c9fca60eaf85034c6829838188e4e4c8ffb2b"
   integrity sha512-hsU18Ae8CDTR6Kgu9DYf0EbCr/a5iGL0rytQDobUcdpYOKokk8LEjVphnXkDkgpi0wYVsqrXuP0bZxJaTqdgoA==
 
-athena-query-result-parser@^0.2:
-  version "0.2.8"
-  resolved "https://registry.yarnpkg.com/athena-query-result-parser/-/athena-query-result-parser-0.2.8.tgz#c351e157091e72c8a6c4da4963993611a781cb80"
-  integrity sha512-QZ5xIArBT9E8q0/iTVGOQQRfA47yesp1MWC66W89PTkTkW2Rk7CH1tDfVpSBtbWaykjWP8pF0yC0TSarll3mcg==
+athena-query-result-parser@^0.3.1:
+  version "0.3.1"
+  resolved "https://registry.yarnpkg.com/athena-query-result-parser/-/athena-query-result-parser-0.3.1.tgz#771ee78af055398df283042cbc58bc013801c7b6"
+  integrity sha512-0AfSC6SzpuXttJi1qLnRu1Tp0SSUYdcB9bYgr6phdqj231CB+NbXGocy0NxsHMPsDURll3Ty2xp6eijFtfrLmw==
   dependencies:
     "@aws-sdk/client-athena" "^3.983.0"
 

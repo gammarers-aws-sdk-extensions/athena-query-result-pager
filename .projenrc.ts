@@ -6,10 +6,15 @@ const project = new typescript.TypeScriptProject({
   name: 'athena-query-result-pager',
   projenrcTs: true,
   typescriptVersion: '5.9.x',
+  packageManager: javascript.NodePackageManager.YARN_CLASSIC,
   repository: 'https://github.com/gammarers-aws-sdk-extensions/athena-query-result-pager.git',
+  description: 'Paginate AWS Athena GetQueryResults calls with AWS SDK v3. This library walks NextToken, parses tabular rows with athena-query-result-parser, and forwards MaxResults and QueryResultType from PagerOptions on every GetQueryResults request.',
+  keywords: [
+    'aws', 'aws-sdk', 'athena', 'query', 'result', 'pager',
+  ],
   deps: [
-    '@aws-sdk/client-athena@^3',
-    'athena-query-result-parser@^0.2',
+    '@aws-sdk/client-athena@^3.983.0',
+    'athena-query-result-parser@^0.3.1',
   ],
   releaseToNpm: true,
   npmTrustedPublishing: true,

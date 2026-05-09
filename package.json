@@ -1,5 +1,6 @@
 {
   "name": "athena-query-result-pager",
+  "description": "Paginate AWS Athena GetQueryResults calls with AWS SDK v3. This library walks NextToken, parses tabular rows with athena-query-result-parser, and forwards MaxResults and QueryResultType from PagerOptions on every GetQueryResults request.",
   "repository": {
     "type": "git",
     "url": "https://github.com/gammarers-aws-sdk-extensions/athena-query-result-pager.git"
@@ -48,11 +49,26 @@
     "typescript": "5.9.x"
   },
   "dependencies": {
-    "@aws-sdk/client-athena": "^3",
-    "athena-query-result-parser": "^0.2"
+    "@aws-sdk/client-athena": "^3.983.0",
+    "athena-query-result-parser": "^0.3.1"
   },
+  "keywords": [
+    "athena",
+    "aws",
+    "aws-sdk",
+    "pager",
+    "query",
+    "result"
+  ],
   "engines": {
     "node": ">= 20.0.0"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "yarn",
+      "version": "1.22.22",
+      "onFail": "ignore"
+    }
   },
   "main": "lib/index.js",
   "license": "Apache-2.0",

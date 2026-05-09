@@ -1,55 +1,76 @@
-import { AthenaClient, GetQueryResultsCommand, type GetQueryResultsCommandInput } from '@aws-sdk/client-athena';
+import { AthenaClient, GetQueryResultsCommand, QueryResultType, type GetQueryResultsCommandInput } from '@aws-sdk/client-athena';
 import { AthenaQueryResultParser, type ParsedRow, type RowParser } from 'athena-query-result-parser';
 
-/** Default maximum number of rows per page. */
+/** Default maximum number of result rows requested per {@link AthenaQueryResultPager} API call (`MaxResults`). */
 const DEFAULT_MAX_RESULTS = 1000;
-/** Minimum and maximum allowed by Athena GetQueryResults. */
+/** Minimum `MaxResults` value allowed by Athena `GetQueryResults`. */
 const MIN_MAX_RESULTS = 1;
+/** Maximum `MaxResults` value allowed by Athena `GetQueryResults`. */
 const MAX_MAX_RESULTS = 1000;
 
-/** Default query result type for GetQueryResults. */
-const DEFAULT_QUERY_RESULT_TYPE = 'DATA_ROWS' as const;
+/** Default `QueryResultType` forwarded to Athena `GetQueryResults`. */
+const DEFAULT_QUERY_RESULT_TYPE = QueryResultType.DATA_ROWS;
 
 /**
- * Type for a single page of query results.
+ * One page of Athena query rows after a {@link AthenaQueryResultPager} fetch or generator step.
+ *
+ * @typeParam T - Row representation; use {@link ParsedRow} or a type produced by {@link RowParser}.
  */
 export interface PageResult<T> {
-  /** Parsed row data. */
+  /** Parsed rows for this page only. */
   rows: T[];
-  /** Token for the next page (undefined if no more pages). */
+  /** Continuation token for the following page (`undefined` when this is the last page). */
   nextToken?: string;
-  /** Number of rows in this page. */
+  /** Same as `rows.length` for convenience. */
   rowCount: number;
 }
 
 /**
- * Options for the pager.
+ * Settings applied to every `GetQueryResults` invocation made by {@link AthenaQueryResultPager}.
  */
 export interface PagerOptions {
-  /** Maximum number of rows per page (default: 1000). */
+  /**
+   * `MaxResults` per request — must be an integer from 1 through 1000 (Athena limits).
+   * @defaultValue 1000
+   */
   maxResults?: number;
-  /** Query result type (default: 'DATA_ROWS'). */
-  queryResultType?: 'DATA_ROWS';
+  /**
+   * `QueryResultType` forwarded to Athena (for example raw data rows versus manifest rows for CTAS/UNLOAD/INSERT outputs).
+   * @defaultValue `QueryResultType.DATA_ROWS`
+   */
+  queryResultType?: QueryResultType;
 }
 
 /**
- * AthenaQueryResultPager
- * Fetches Athena query results page by page.
+ * Paginates Athena `GetQueryResults` (AWS SDK for JavaScript v3): walks `NextToken` and parses tabular rows with
+ * `athena-query-result-parser` when needed.
+ *
+ * `maxResults` and `queryResultType` from the constructor are included on every `GetQueryResults` request.
+ *
+ * @see {@link https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/client/athena/command/GetQueryResultsCommand/ | GetQueryResultsCommand (AWS SDK)}
  */
 export class AthenaQueryResultPager {
 
   /**
-   * Returns whether there is a next page.
-   * @param pageResult - Previous page result.
+   * @typeParam T - Row type held in {@link PageResult.rows}.
+   * @param pageResult - The most recently retrieved page from `fetchPage`, `fetchPageWith`, or a page iterator.
+   * @returns `true` when {@link PageResult.nextToken} is defined and another page should be fetched.
    */
   static hasNextPage<T>(pageResult: PageResult<T>): boolean {
     return pageResult.nextToken !== undefined;
   }
 
   private readonly client: AthenaClient;
+  /** Normalized pager settings (every field set after merging defaults). */
   private readonly options: Required<PagerOptions>;
+  /** Stateful parser reused across calls; recreated by {@link AthenaQueryResultPager.reset}. */
   private parser: AthenaQueryResultParser;
 
+  /**
+   * @param client - SDK v3 `AthenaClient` used to call `GetQueryResults`.
+   * @param options - Optional `MaxResults` and `QueryResultType`; defaults apply when omitted.
+   * @throws {RangeError} When `maxResults` is not an integer in `1..1000` inclusive.
+   */
   constructor(client: AthenaClient, options: PagerOptions = {}) {
     const maxResults = options.maxResults ?? DEFAULT_MAX_RESULTS;
     if (!Number.isInteger(maxResults) || maxResults < MIN_MAX_RESULTS || maxResults > MAX_MAX_RESULTS) {
@@ -67,10 +88,12 @@ export class AthenaQueryResultPager {
   }
 
   /**
-   * Fetches one page of data as raw ParsedRow.
-   * @param queryExecutionId - Query execution ID.
-   * @param nextToken - Token for the next page (undefined on first call).
-   * @returns Page result.
+   * Retrieves a single results page using {@link AthenaQueryResultParser.parseResultSet} (dictionary-shaped rows).
+   *
+   * @param queryExecutionId - Athena query execution identifier.
+   * @param nextToken - Pass `undefined` first; subsequent calls use {@link PageResult.nextToken}.
+   * @returns Parsed rows plus pagination metadata from this response only.
+   * @throws {Error} When `queryExecutionId` is empty or whitespace only.
    */
   async fetchPage(
     queryExecutionId: string,
@@ -84,6 +107,7 @@ export class AthenaQueryResultPager {
       QueryExecutionId: queryExecutionId,
       NextToken: nextToken,
       MaxResults: this.options.maxResults,
+      QueryResultType: this.options.queryResultType,
     };
 
     const response = await this.client.send(new GetQueryResultsCommand(input));
@@ -98,11 +122,14 @@ export class AthenaQueryResultPager {
   }
 
   /**
-   * Fetches one page of data and transforms it with a custom row parser.
-   * @param queryExecutionId - Query execution ID.
-   * @param rowParser - Row parser.
-   * @param nextToken - Token for the next page (undefined on first call).
-   * @returns Page result.
+   * Retrieves one page and maps each {@link ParsedRow} through `rowParser`.
+   *
+   * @typeParam T - Output type produced by `rowParser`.
+   * @param queryExecutionId - Athena query execution identifier.
+   * @param rowParser - Converts each dictionary row into `T`.
+   * @param nextToken - Pass `undefined` first; subsequent calls use {@link PageResult.nextToken}.
+   * @returns Transformed rows plus pagination metadata from this response only.
+   * @throws {Error} When `queryExecutionId` is empty or whitespace only.
    */
   async fetchPageWith<T>(
     queryExecutionId: string,
@@ -117,6 +144,7 @@ export class AthenaQueryResultPager {
       QueryExecutionId: queryExecutionId,
       NextToken: nextToken,
       MaxResults: this.options.maxResults,
+      QueryResultType: this.options.queryResultType,
     };
 
     const response = await this.client.send(new GetQueryResultsCommand(input));
@@ -131,8 +159,10 @@ export class AthenaQueryResultPager {
   }
 
   /**
-   * Iterates page by page via AsyncGenerator (raw ParsedRow).
-   * @param queryExecutionId - Query execution ID.
+   * Lazily walks all pages for an execution, yielding {@link PageResult} of {@link ParsedRow} each step.
+   *
+   * @param queryExecutionId - Athena query execution identifier.
+   * @yields One page at a time until AWS returns no `NextToken`.
    */
   async *iteratePages(
     queryExecutionId: string,
@@ -147,9 +177,12 @@ export class AthenaQueryResultPager {
   }
 
   /**
-   * Iterates page by page via AsyncGenerator with a custom row parser.
-   * @param queryExecutionId - Query execution ID.
-   * @param rowParser - Row parser.
+   * Same as {@link AthenaQueryResultPager.iteratePages} but applies `rowParser` per row on every page.
+   *
+   * @typeParam T - Output type emitted in {@link PageResult.rows}.
+   * @param queryExecutionId - Athena query execution identifier.
+   * @param rowParser - Converts each parsed row into `T`.
+   * @yields Successive {@link PageResult} values whose `rows` are typed as `T`.
    */
   async *iteratePagesWith<T>(
     queryExecutionId: string,
@@ -165,9 +198,12 @@ export class AthenaQueryResultPager {
   }
 
   /**
-   * Iterates row by row via AsyncGenerator (memory-efficient).
-   * @param queryExecutionId - Query execution ID.
-   * @param rowParser - Row parser.
+   * Flattens {@link AthenaQueryResultPager.iteratePagesWith} into individual `T` values (one row per `next()`).
+   *
+   * @typeParam T - Output type produced by `rowParser`.
+   * @param queryExecutionId - Athena query execution identifier.
+   * @param rowParser - Converts each parsed row into `T`.
+   * @yields Each data row in execution order without buffering the full result set in memory.
    */
   async *iterateRows<T>(
     queryExecutionId: string,
@@ -181,12 +217,14 @@ export class AthenaQueryResultPager {
   }
 
   /**
-   * Resets the parser state. Call before processing a new query.
+   * Instantiates a fresh {@link AthenaQueryResultParser} so header-row handling does not leak between queries.
+   *
+   * Call when reusing this pager for a different `queryExecutionId` than the previous parse sequence.
    */
   reset(): void {
     this.parser = new AthenaQueryResultParser();
   }
 }
 
-/** Re-export of types from athena-query-result-parser. */
+/** Re-exports `ParsedRow` and `RowParser` from the `athena-query-result-parser` package. */
 export type { ParsedRow, RowParser };

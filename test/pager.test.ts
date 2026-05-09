@@ -1,4 +1,4 @@
-import { AthenaClient, GetQueryResultsCommand } from '@aws-sdk/client-athena';
+import { AthenaClient, GetQueryResultsCommand, QueryResultType } from '@aws-sdk/client-athena';
 import type { GetQueryResultsCommandOutput } from '@aws-sdk/client-athena';
 import {
   AthenaQueryResultPager,
@@ -24,6 +24,17 @@ const createMockResultSet = (
       Data: columns.map((col) => ({ VarCharValue: r[col] ?? undefined })),
     })),
   };
+};
+
+/** Asserts default pager shape: `MaxResults` 1000 and `QueryResultType` DATA_ROWS. */
+const expectDefaultGetQueryResultsShape = (input: {
+  MaxResults?: number;
+  QueryResultType?: string;
+  QueryExecutionId?: string;
+  NextToken?: string | undefined;
+}): void => {
+  expect(input.MaxResults).toBe(1000);
+  expect(input.QueryResultType).toBe(QueryResultType.DATA_ROWS);
 };
 
 const createMockSend = (
@@ -76,6 +87,7 @@ describe('AthenaQueryResultPager', () => {
             QueryExecutionId: 'exec-1',
             MaxResults: 1000,
             NextToken: undefined,
+            QueryResultType: QueryResultType.DATA_ROWS,
           }),
         }),
       );
@@ -85,13 +97,14 @@ describe('AthenaQueryResultPager', () => {
       const client = { send: jest.fn().mockResolvedValue({ ResultSet: createMockResultSet([]), NextToken: undefined }) } as unknown as AthenaClient;
       const pager = new AthenaQueryResultPager(client, {
         maxResults: 100,
-        queryResultType: 'DATA_ROWS',
+        queryResultType: QueryResultType.DATA_MANIFEST,
       });
       await pager.fetchPage('exec-1');
       expect(client.send).toHaveBeenCalledWith(
         expect.objectContaining({
           input: expect.objectContaining({
             MaxResults: 100,
+            QueryResultType: QueryResultType.DATA_MANIFEST,
           }),
         }),
       );
@@ -120,6 +133,7 @@ describe('AthenaQueryResultPager', () => {
         QueryExecutionId: 'exec-123',
         NextToken: undefined,
         MaxResults: 1000,
+        QueryResultType: QueryResultType.DATA_ROWS,
       });
       expect(result.rows).toHaveLength(1);
       expect(result.rows[0]).toMatchObject({ id: '1', name: 'a' });
@@ -141,7 +155,21 @@ describe('AthenaQueryResultPager', () => {
       const page2 = await pager.fetchPage('exec-1', 'token-2');
       expect(send).toHaveBeenCalledTimes(2);
       expect(send).toHaveBeenLastCalledWith(expect.any(GetQueryResultsCommand));
-      expect(send.mock.calls[1][0].input.NextToken).toBe('token-2');
+
+      const firstInput = send.mock.calls[0][0].input;
+      expect(firstInput).toMatchObject({
+        QueryExecutionId: 'exec-1',
+        NextToken: undefined,
+      });
+      expectDefaultGetQueryResultsShape(firstInput);
+
+      const secondInput = send.mock.calls[1][0].input;
+      expect(secondInput).toMatchObject({
+        QueryExecutionId: 'exec-1',
+        NextToken: 'token-2',
+      });
+      expectDefaultGetQueryResultsShape(secondInput);
+
       expect(page2.nextToken).toBeUndefined();
     });
 
@@ -176,11 +204,37 @@ describe('AthenaQueryResultPager', () => {
 
       const result = await pager.fetchPageWith<User>('exec-1', rowParser);
 
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith(expect.any(GetQueryResultsCommand));
+      const cmd = send.mock.calls[0][0];
+      expect(cmd.input).toEqual({
+        QueryExecutionId: 'exec-1',
+        NextToken: undefined,
+        MaxResults: 1000,
+        QueryResultType: QueryResultType.DATA_ROWS,
+      });
+
       expect(result.rows).toHaveLength(2);
       expect(result.rows[0]).toEqual({ id: '1', name: 'Alice' });
       expect(result.rows[1]).toEqual({ id: '2', name: 'Bob' });
       expect(result.rowCount).toBe(2);
       expect(result.nextToken).toBeUndefined();
+    });
+
+    it('should forward QueryResultType from constructor options on GetQueryResults', async () => {
+      const send = jest.fn().mockResolvedValue({ ResultSet: createMockResultSet([]), NextToken: undefined }) as jest.Mock;
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client, { queryResultType: QueryResultType.DATA_MANIFEST });
+      const rowParser = (row: ParsedRow): ParsedRow => row;
+
+      await pager.fetchPageWith('exec-ms', rowParser);
+
+      expect(send.mock.calls[0][0].input).toMatchObject({
+        QueryExecutionId: 'exec-ms',
+        QueryResultType: QueryResultType.DATA_MANIFEST,
+        MaxResults: 1000,
+        NextToken: undefined,
+      });
     });
 
     it('should throw when queryExecutionId is empty or whitespace only', async () => {
@@ -231,6 +285,39 @@ describe('AthenaQueryResultPager', () => {
       expect(pages[2].rows[0]).toMatchObject({ x: '3' });
       expect(pages[2].nextToken).toBeUndefined();
       expect(send).toHaveBeenCalledTimes(3);
+
+      for (let i = 0; i < 3; i += 1) {
+        expectDefaultGetQueryResultsShape(send.mock.calls[i][0].input);
+        expect(send.mock.calls[i][0].input.QueryExecutionId).toBe('exec-1');
+      }
+      expect(send.mock.calls[0][0].input.NextToken).toBeUndefined();
+      expect(send.mock.calls[1][0].input.NextToken).toBe('t2');
+      expect(send.mock.calls[2][0].input.NextToken).toBe('t3');
+    });
+
+    it('should include QueryResultType on each page when options override defaults', async () => {
+      const send = createMockSend([
+        { rows: [{ x: '1' }], nextToken: 't2' },
+        { rows: [{ x: '2' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client, { maxResults: 500, queryResultType: QueryResultType.DATA_MANIFEST });
+
+      let pageCount = 0;
+      for await (const page of pager.iteratePages('exec-1')) {
+        expect(page.rows).toHaveLength(1);
+        pageCount += 1;
+      }
+      expect(pageCount).toBe(2);
+
+      expect(send).toHaveBeenCalledTimes(2);
+      for (let i = 0; i < 2; i += 1) {
+        expect(send.mock.calls[i][0].input).toMatchObject({
+          MaxResults: 500,
+          QueryResultType: QueryResultType.DATA_MANIFEST,
+          QueryExecutionId: 'exec-1',
+        });
+      }
     });
   });
 
@@ -251,6 +338,12 @@ describe('AthenaQueryResultPager', () => {
 
       expect(pages).toHaveLength(1);
       expect(pages[0].rows).toEqual([{ id: '1' }]);
+      expect(send.mock.calls[0][0].input).toEqual(
+        expect.objectContaining({
+          QueryResultType: QueryResultType.DATA_ROWS,
+          MaxResults: 1000,
+        }),
+      );
     });
   });
 
@@ -271,6 +364,9 @@ describe('AthenaQueryResultPager', () => {
       }
 
       expect(rows).toEqual([{ id: '1' }, { id: '2' }, { id: '3' }]);
+      expect(send).toHaveBeenCalledTimes(2);
+      expectDefaultGetQueryResultsShape(send.mock.calls[0][0].input);
+      expectDefaultGetQueryResultsShape(send.mock.calls[1][0].input);
     });
   });
 
