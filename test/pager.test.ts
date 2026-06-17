@@ -1,7 +1,8 @@
-import { AthenaClient, GetQueryResultsCommand, QueryResultType } from '@aws-sdk/client-athena';
+import { AthenaClient, GetQueryResultsCommand } from '@aws-sdk/client-athena';
 import type { GetQueryResultsCommandOutput } from '@aws-sdk/client-athena';
 import {
   AthenaQueryResultPager,
+  QueryResultType,
   type PageResult,
   type ParsedRow,
 } from '../src';
@@ -115,6 +116,20 @@ describe('AthenaQueryResultPager', () => {
       expect(() => new AthenaQueryResultPager(client, { maxResults })).toThrow(
         'options.maxResults must be an integer between 1 and 1000',
       );
+    });
+
+    it('should forward parseResultSetOptions to the parser', async () => {
+      const send = createMockSend([{ rows: [{ id: '1' }], nextToken: undefined }]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client, {
+        parseResultSetOptions: { skipHeaderRow: false },
+      });
+
+      const result = await pager.fetchPage('exec-1');
+
+      expect(result.rows).toHaveLength(2);
+      expect(result.rows[0]).toMatchObject({ id: 'id' });
+      expect(result.rows[1]).toMatchObject({ id: '1' });
     });
   });
 
@@ -345,9 +360,60 @@ describe('AthenaQueryResultPager', () => {
         }),
       );
     });
+
+    it('should yield multiple pages with custom parsed rows until nextToken is undefined', async () => {
+      const send = createMockSend([
+        { rows: [{ id: '1' }], nextToken: 't2' },
+        { rows: [{ id: '2' }], nextToken: 't3' },
+        { rows: [{ id: '3' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+      type Item = { id: string };
+      const rowParser = (row: ParsedRow): Item => ({ id: String(row.id ?? '') });
+      const pages: PageResult<Item>[] = [];
+
+      for await (const page of pager.iteratePagesWith('exec-1', rowParser)) {
+        pages.push(page);
+      }
+
+      expect(pages).toHaveLength(3);
+      expect(pages[0].rows).toEqual([{ id: '1' }]);
+      expect(pages[1].rows).toEqual([{ id: '2' }]);
+      expect(pages[2].rows).toEqual([{ id: '3' }]);
+      expect(pages[2].nextToken).toBeUndefined();
+      expect(send).toHaveBeenCalledTimes(3);
+
+      for (let i = 0; i < 3; i += 1) {
+        expectDefaultGetQueryResultsShape(send.mock.calls[i][0].input);
+        expect(send.mock.calls[i][0].input.QueryExecutionId).toBe('exec-1');
+      }
+      expect(send.mock.calls[0][0].input.NextToken).toBeUndefined();
+      expect(send.mock.calls[1][0].input.NextToken).toBe('t2');
+      expect(send.mock.calls[2][0].input.NextToken).toBe('t3');
+    });
   });
 
   describe('iterateRows', () => {
+    it('should yield each ParsedRow from all pages when rowParser is omitted', async () => {
+      const send = createMockSend([
+        { rows: [{ id: '1' }, { id: '2' }], nextToken: 't2' },
+        { rows: [{ id: '3' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+      const rows: ParsedRow[] = [];
+
+      for await (const row of pager.iterateRows('exec-1')) {
+        rows.push(row);
+      }
+
+      expect(rows).toEqual([{ id: '1' }, { id: '2' }, { id: '3' }]);
+      expect(send).toHaveBeenCalledTimes(2);
+      expectDefaultGetQueryResultsShape(send.mock.calls[0][0].input);
+      expectDefaultGetQueryResultsShape(send.mock.calls[1][0].input);
+    });
+
     it('should yield each row from all pages', async () => {
       const send = createMockSend([
         { rows: [{ id: '1' }, { id: '2' }], nextToken: 't2' },
@@ -371,7 +437,7 @@ describe('AthenaQueryResultPager', () => {
   });
 
   describe('reset', () => {
-    it('should recreate parser instance', async () => {
+    it('should clear parser state for a new query execution', async () => {
       const send = createMockSend([
         { rows: [{ a: '1' }], nextToken: undefined },
         { rows: [{ b: '2' }], nextToken: undefined },
@@ -385,6 +451,64 @@ describe('AthenaQueryResultPager', () => {
       pager.reset();
       const page2 = await pager.fetchPage('exec-2');
       expect(page2.rows[0]).toMatchObject({ b: '2' });
+    });
+  });
+
+  describe('getLastHeaderRowDecision', () => {
+    it('should return null before parsing and a decision after fetchPage', async () => {
+      const send = createMockSend([{ rows: [{ id: '1' }], nextToken: undefined }]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+
+      expect(pager.getLastHeaderRowDecision()).toBeNull();
+
+      await pager.fetchPage('exec-1');
+
+      expect(pager.getLastHeaderRowDecision()).not.toBeNull();
+    });
+  });
+
+  describe('parseResultSetOptions', () => {
+    it('should throw when columnCountMismatchBehavior is throw and a row length mismatches', async () => {
+      const resultSet = {
+        ResultSetMetadata: {
+          ColumnInfo: [
+            { Name: 'id', Type: 'varchar' },
+            { Name: 'name', Type: 'varchar' },
+          ],
+        },
+        Rows: [
+          { Data: [{ VarCharValue: 'id' }, { VarCharValue: 'name' }] },
+          { Data: [{ VarCharValue: '1' }] },
+        ],
+      };
+      const client = {
+        send: jest.fn().mockResolvedValue({ ResultSet: resultSet, NextToken: undefined }),
+      } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client, {
+        parseResultSetOptions: {
+          skipHeaderRow: false,
+          columnCountMismatchBehavior: 'throw',
+        },
+      });
+
+      await expect(pager.fetchPage('exec-1')).rejects.toThrow();
+    });
+
+    it('should forward parseResultSetOptions to fetchPageWith', async () => {
+      const send = createMockSend([{ rows: [{ id: '1' }], nextToken: undefined }]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client, {
+        parseResultSetOptions: { skipHeaderRow: false },
+      });
+      type Item = { id: string };
+      const rowParser = (row: ParsedRow): Item => ({ id: String(row.id ?? '') });
+
+      const result = await pager.fetchPageWith('exec-1', rowParser);
+
+      expect(result.rows).toHaveLength(2);
+      expect(result.rows[0]).toEqual({ id: 'id' });
+      expect(result.rows[1]).toEqual({ id: '1' });
     });
   });
 
