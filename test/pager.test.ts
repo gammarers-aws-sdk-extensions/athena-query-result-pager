@@ -345,6 +345,38 @@ describe('AthenaQueryResultPager', () => {
         }),
       );
     });
+
+    it('should yield multiple pages with custom parsed rows until nextToken is undefined', async () => {
+      const send = createMockSend([
+        { rows: [{ id: '1' }], nextToken: 't2' },
+        { rows: [{ id: '2' }], nextToken: 't3' },
+        { rows: [{ id: '3' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+      type Item = { id: string };
+      const rowParser = (row: ParsedRow): Item => ({ id: String(row.id ?? '') });
+      const pages: PageResult<Item>[] = [];
+
+      for await (const page of pager.iteratePagesWith('exec-1', rowParser)) {
+        pages.push(page);
+      }
+
+      expect(pages).toHaveLength(3);
+      expect(pages[0].rows).toEqual([{ id: '1' }]);
+      expect(pages[1].rows).toEqual([{ id: '2' }]);
+      expect(pages[2].rows).toEqual([{ id: '3' }]);
+      expect(pages[2].nextToken).toBeUndefined();
+      expect(send).toHaveBeenCalledTimes(3);
+
+      for (let i = 0; i < 3; i += 1) {
+        expectDefaultGetQueryResultsShape(send.mock.calls[i][0].input);
+        expect(send.mock.calls[i][0].input.QueryExecutionId).toBe('exec-1');
+      }
+      expect(send.mock.calls[0][0].input.NextToken).toBeUndefined();
+      expect(send.mock.calls[1][0].input.NextToken).toBe('t2');
+      expect(send.mock.calls[2][0].input.NextToken).toBe('t3');
+    });
   });
 
   describe('iterateRows', () => {
