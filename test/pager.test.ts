@@ -348,6 +348,25 @@ describe('AthenaQueryResultPager', () => {
   });
 
   describe('iterateRows', () => {
+    it('should yield each ParsedRow from all pages when rowParser is omitted', async () => {
+      const send = createMockSend([
+        { rows: [{ id: '1' }, { id: '2' }], nextToken: 't2' },
+        { rows: [{ id: '3' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+      const rows: ParsedRow[] = [];
+
+      for await (const row of pager.iterateRows('exec-1')) {
+        rows.push(row);
+      }
+
+      expect(rows).toEqual([{ id: '1' }, { id: '2' }, { id: '3' }]);
+      expect(send).toHaveBeenCalledTimes(2);
+      expectDefaultGetQueryResultsShape(send.mock.calls[0][0].input);
+      expectDefaultGetQueryResultsShape(send.mock.calls[1][0].input);
+    });
+
     it('should yield each row from all pages', async () => {
       const send = createMockSend([
         { rows: [{ id: '1' }, { id: '2' }], nextToken: 't2' },
