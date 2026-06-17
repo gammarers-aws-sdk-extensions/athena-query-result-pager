@@ -35,8 +35,10 @@ export interface PagerOptions {
    */
   maxResults?: number;
   /**
-   * `QueryResultType` forwarded to Athena (for example raw data rows versus manifest rows for CTAS/UNLOAD/INSERT outputs).
-   * @defaultValue `QueryResultType.DATA_ROWS`
+   * Athena `GetQueryResults` {@link QueryResultType} — any member of the AWS SDK enum
+   * (for example {@link QueryResultType.DATA_ROWS} for tabular rows or {@link QueryResultType.DATA_MANIFEST}
+   * for CTAS / UNLOAD / INSERT manifest outputs when Athena supports them).
+   * @defaultValue {@link QueryResultType.DATA_ROWS}
    */
   queryResultType?: QueryResultType;
 }
@@ -268,5 +270,7 @@ export class AthenaQueryResultPager {
   }
 }
 
+/** Re-exports {@link QueryResultType} from `@aws-sdk/client-athena`. */
+export { QueryResultType } from '@aws-sdk/client-athena';
 /** Re-exports `ParsedRow` and `RowParser` from the `athena-query-result-parser` package. */
 export type { ParsedRow, RowParser };

@@ -1,7 +1,8 @@
-import { AthenaClient, GetQueryResultsCommand, QueryResultType } from '@aws-sdk/client-athena';
+import { AthenaClient, GetQueryResultsCommand } from '@aws-sdk/client-athena';
 import type { GetQueryResultsCommandOutput } from '@aws-sdk/client-athena';
 import {
   AthenaQueryResultPager,
+  QueryResultType,
   type PageResult,
   type ParsedRow,
 } from '../src';
