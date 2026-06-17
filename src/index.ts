@@ -1,5 +1,11 @@
 import { AthenaClient, GetQueryResultsCommand, QueryResultType, type GetQueryResultsCommandInput } from '@aws-sdk/client-athena';
-import { AthenaQueryResultParser, type ParsedRow, type RowParser } from 'athena-query-result-parser';
+import {
+  AthenaQueryResultParser,
+  type HeaderRowDecision,
+  type ParseResultSetOptions,
+  type ParsedRow,
+  type RowParser,
+} from 'athena-query-result-parser';
 
 /** Default maximum number of result rows requested per {@link AthenaQueryResultPager} API call (`MaxResults`). */
 const DEFAULT_MAX_RESULTS = 1000;
@@ -41,6 +47,14 @@ export interface PagerOptions {
    * @defaultValue {@link QueryResultType.DATA_ROWS}
    */
   queryResultType?: QueryResultType;
+  /**
+   * Options forwarded to every {@link AthenaQueryResultParser.parseResultSet} /
+   * {@link AthenaQueryResultParser.parseResultSetWith} call (for example
+   * `columnCountMismatchBehavior`, `skipHeaderRow`, `headerRowDetectionStrategy`).
+   *
+   * @see ParseResultSetOptions
+   */
+  parseResultSetOptions?: ParseResultSetOptions;
 }
 
 /**
@@ -51,7 +65,8 @@ export interface PagerOptions {
  * (`fetchPage` / `fetchPageWith`, `iteratePages` / `iteratePagesWith`) and at the row level
  * (`iterateRows` with or without `rowParser`).
  *
- * Constructor `maxResults` and `queryResultType` are included on every `GetQueryResults` request.
+ * Constructor `maxResults`, `queryResultType`, and optional `parseResultSetOptions` are applied on every
+ * `GetQueryResults` request and {@link AthenaQueryResultParser} invocation respectively.
  *
  * @see {@link https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/client/athena/command/GetQueryResultsCommand/ | GetQueryResultsCommand (AWS SDK)}
  */
@@ -71,7 +86,9 @@ export class AthenaQueryResultPager {
   /** SDK v3 client used for every `GetQueryResults` call. */
   private readonly client: AthenaClient;
   /** Normalized pager settings (every field set after merging defaults). */
-  private readonly options: Required<PagerOptions>;
+  private readonly options: Required<Pick<PagerOptions, 'maxResults' | 'queryResultType'>>;
+  /** Parser options applied on every page parse (undefined uses parser defaults). */
+  private readonly parseResultSetOptions?: ParseResultSetOptions;
   /** Stateful parser reused across calls; recreated by {@link AthenaQueryResultPager.reset}. */
   private parser: AthenaQueryResultParser;
 
@@ -79,7 +96,7 @@ export class AthenaQueryResultPager {
    * Creates a pager bound to `client` with optional per-request defaults.
    *
    * @param client - SDK v3 `AthenaClient` used to call `GetQueryResults`.
-   * @param options - Optional `MaxResults` and `QueryResultType`; defaults apply when omitted.
+   * @param options - Optional `MaxResults`, `QueryResultType`, and `ParseResultSetOptions`; defaults apply when omitted.
    * @throws {RangeError} When `maxResults` is not an integer in `1..1000` inclusive.
    */
   constructor(client: AthenaClient, options: PagerOptions = {}) {
@@ -95,6 +112,7 @@ export class AthenaQueryResultPager {
       maxResults,
       queryResultType: options.queryResultType ?? DEFAULT_QUERY_RESULT_TYPE,
     };
+    this.parseResultSetOptions = options.parseResultSetOptions;
     this.parser = new AthenaQueryResultParser();
   }
 
@@ -125,7 +143,7 @@ export class AthenaQueryResultPager {
 
     const response = await this.client.send(new GetQueryResultsCommand(input));
 
-    const rows = this.parser.parseResultSet(response.ResultSet);
+    const rows = this.parser.parseResultSet(response.ResultSet, this.parseResultSetOptions);
 
     return {
       rows,
@@ -164,7 +182,11 @@ export class AthenaQueryResultPager {
 
     const response = await this.client.send(new GetQueryResultsCommand(input));
 
-    const rows = this.parser.parseResultSetWith(response.ResultSet, rowParser);
+    const rows = this.parser.parseResultSetWith(
+      response.ResultSet,
+      rowParser,
+      this.parseResultSetOptions,
+    );
 
     return {
       rows,
@@ -261,16 +283,44 @@ export class AthenaQueryResultPager {
   }
 
   /**
-   * Instantiates a fresh {@link AthenaQueryResultParser} so header-row handling does not leak between queries.
+   * Returns the bundled parser's most recent header-row decision.
+   *
+   * Useful when {@link PagerOptions.parseResultSetOptions} uses `skipHeaderRow: 'auto'`.
+   *
+   * @returns The last {@link HeaderRowDecision}, or `null` before any parse on this pager.
+   */
+  getLastHeaderRowDecision(): HeaderRowDecision | null {
+    return this.parser.getLastHeaderRowDecision();
+  }
+
+  /**
+   * Clears the bundled {@link AthenaQueryResultParser} state so header-row handling does not leak between queries.
    *
    * Call when reusing this pager for a different `queryExecutionId` than the previous parse sequence.
    */
   reset(): void {
-    this.parser = new AthenaQueryResultParser();
+    this.parser.reset();
   }
 }
 
 /** Re-exports {@link QueryResultType} from `@aws-sdk/client-athena`. */
 export { QueryResultType } from '@aws-sdk/client-athena';
-/** Re-exports `ParsedRow` and `RowParser` from the `athena-query-result-parser` package. */
-export type { ParsedRow, RowParser };
+export {
+  EXTRA_COLUMNS_KEY,
+  headersFromMeta,
+  isHeaderRow,
+  rowToObject,
+  rowToTypedObject,
+  toBoolean,
+  toDate,
+  toNumber,
+} from 'athena-query-result-parser';
+export type {
+  AthenaTypedValue,
+  ColumnCountMismatchBehavior,
+  HeaderRowDecision,
+  ParseResultSetOptions,
+  ParsedRow,
+  RowParser,
+  TypedParsedRow,
+} from 'athena-query-result-parser';

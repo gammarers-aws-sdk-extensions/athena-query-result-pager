@@ -117,6 +117,20 @@ describe('AthenaQueryResultPager', () => {
         'options.maxResults must be an integer between 1 and 1000',
       );
     });
+
+    it('should forward parseResultSetOptions to the parser', async () => {
+      const send = createMockSend([{ rows: [{ id: '1' }], nextToken: undefined }]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client, {
+        parseResultSetOptions: { skipHeaderRow: false },
+      });
+
+      const result = await pager.fetchPage('exec-1');
+
+      expect(result.rows).toHaveLength(2);
+      expect(result.rows[0]).toMatchObject({ id: 'id' });
+      expect(result.rows[1]).toMatchObject({ id: '1' });
+    });
   });
 
   describe('fetchPage', () => {
@@ -423,7 +437,7 @@ describe('AthenaQueryResultPager', () => {
   });
 
   describe('reset', () => {
-    it('should recreate parser instance', async () => {
+    it('should clear parser state for a new query execution', async () => {
       const send = createMockSend([
         { rows: [{ a: '1' }], nextToken: undefined },
         { rows: [{ b: '2' }], nextToken: undefined },
@@ -437,6 +451,64 @@ describe('AthenaQueryResultPager', () => {
       pager.reset();
       const page2 = await pager.fetchPage('exec-2');
       expect(page2.rows[0]).toMatchObject({ b: '2' });
+    });
+  });
+
+  describe('getLastHeaderRowDecision', () => {
+    it('should return null before parsing and a decision after fetchPage', async () => {
+      const send = createMockSend([{ rows: [{ id: '1' }], nextToken: undefined }]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+
+      expect(pager.getLastHeaderRowDecision()).toBeNull();
+
+      await pager.fetchPage('exec-1');
+
+      expect(pager.getLastHeaderRowDecision()).not.toBeNull();
+    });
+  });
+
+  describe('parseResultSetOptions', () => {
+    it('should throw when columnCountMismatchBehavior is throw and a row length mismatches', async () => {
+      const resultSet = {
+        ResultSetMetadata: {
+          ColumnInfo: [
+            { Name: 'id', Type: 'varchar' },
+            { Name: 'name', Type: 'varchar' },
+          ],
+        },
+        Rows: [
+          { Data: [{ VarCharValue: 'id' }, { VarCharValue: 'name' }] },
+          { Data: [{ VarCharValue: '1' }] },
+        ],
+      };
+      const client = {
+        send: jest.fn().mockResolvedValue({ ResultSet: resultSet, NextToken: undefined }),
+      } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client, {
+        parseResultSetOptions: {
+          skipHeaderRow: false,
+          columnCountMismatchBehavior: 'throw',
+        },
+      });
+
+      await expect(pager.fetchPage('exec-1')).rejects.toThrow();
+    });
+
+    it('should forward parseResultSetOptions to fetchPageWith', async () => {
+      const send = createMockSend([{ rows: [{ id: '1' }], nextToken: undefined }]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client, {
+        parseResultSetOptions: { skipHeaderRow: false },
+      });
+      type Item = { id: string };
+      const rowParser = (row: ParsedRow): Item => ({ id: String(row.id ?? '') });
+
+      const result = await pager.fetchPageWith('exec-1', rowParser);
+
+      expect(result.rows).toHaveLength(2);
+      expect(result.rows[0]).toEqual({ id: 'id' });
+      expect(result.rows[1]).toEqual({ id: '1' });
     });
   });
 
