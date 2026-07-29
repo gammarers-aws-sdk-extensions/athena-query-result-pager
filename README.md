@@ -3,7 +3,7 @@
 ![npm](https://img.shields.io/npm/v/athena-query-result-pager)
 ![license](https://img.shields.io/npm/l/athena-query-result-pager)
 
-Paginate [AWS Athena](https://docs.aws.amazon.com/athena/latest/ug/v3-sdk.html) **`GetQueryResults`** calls with AWS SDK v3. This library walks **`NextToken`**, parses tabular rows with [athena-query-result-parser](https://www.npmjs.com/package/athena-query-result-parser) (0.4+), and forwards **`MaxResults`**, **`QueryResultType`**, and optional **`ParseResultSetOptions`** from **[PagerOptions](#options)** on every page fetch.
+Paginate [AWS Athena](https://docs.aws.amazon.com/athena/latest/ug/v3-sdk.html) **`GetQueryResults`** calls with AWS SDK v3. This library walks **`NextToken`**, parses tabular rows with [athena-query-result-parser](https://www.npmjs.com/package/athena-query-result-parser) (0.5+), and forwards **`MaxResults`**, **`QueryResultType`**, and optional **`ParseResultSetOptions`** from **[PagerOptions](#options)** on every page fetch.
 
 Page-level and row-level APIs are symmetric: use the base method for raw **`ParsedRow`** values, or the `*With` / `rowParser` variant for custom types.
 
@@ -28,13 +28,13 @@ Both still require a finished query execution and rely on your **`AthenaClient`*
 
 - Sends paginated Athena **`GetQueryResults`** requests (`NextToken` / **`MaxResults`**).
 - Forwards **`QueryResultType`** from the pager constructor on each request — accepts the full AWS SDK enum (**`QueryResultType.DATA_ROWS`**, **`QueryResultType.DATA_MANIFEST`**, …). Use **`QueryResultType.DATA_MANIFEST`** for CTAS / UNLOAD / INSERT manifest workflows when Athena allows it.
-- Forwards **`parseResultSetOptions`** to every parser invocation — **`columnCountMismatchBehavior`**, **`skipHeaderRow`**, **`headerRowDetectionStrategy`**, and other [parser 0.4+ options](https://www.npmjs.com/package/athena-query-result-parser).
+- Forwards **`parseResultSetOptions`** to every parser invocation — **`columnCountMismatchBehavior`**, **`skipHeaderRow`**, **`headerRowDetectionStrategy`**, **`unavailableResultBehavior`**, **`maxRows`**, and other [parser 0.5+ options](https://www.npmjs.com/package/athena-query-result-parser).
 - **Paired APIs** for raw **`ParsedRow`** dictionaries versus typed rows via **`RowParser<T>`**:
   - Page level: **`fetchPage`** / **`fetchPageWith`**, **`iteratePages`** / **`iteratePagesWith`**
   - Row level: **`iterateRows`** (no parser) / **`iterateRows`** (with **`rowParser`**)
 - Async generators iterate **page-by-page** or **row-by-row** without holding full result sets in memory (only one page of rows is buffered at a time for row iterators).
 - Fail-fast validation: **`maxResults`** must be an integer in **`1..1000`**; **`queryExecutionId`** must be non-empty (**`fetchPage`**, **`fetchPageWith`**).
-- Re-exports **`QueryResultType`**, parser types (**`ParseResultSetOptions`**, **`ParsedRow`**, **`RowParser<T>`**, …), and parser utilities (**`rowToTypedObject`**, **`EXTRA_COLUMNS_KEY`**, …) from the package entry point.
+- Re-exports **`QueryResultType`**, parser types (**`ParseResultSetOptions`**, **`ParsedRow`**, **`RowParser<T>`**, …), and parser utilities (**`rowToTypedObject`**, **`parseResultSetOnce`**, **`EXTRA_COLUMNS_KEY`**, …) from the package entry point.
 - Helpers: **`AthenaQueryResultPager.hasNextPage`**, **`getLastHeaderRowDecision()`**, and **`reset()`** (usually optional — parser state resets automatically when **`queryExecutionId`** changes).
 - Does **not** wait for query completion or add Athena-specific retry beyond the AWS SDK client — see **[Caller responsibilities](#caller-responsibilities)**.
 
@@ -52,7 +52,7 @@ yarn add athena-query-result-pager
 pnpm add athena-query-result-pager
 ```
 
-Runtime dependencies: `@aws-sdk/client-athena`, `athena-query-result-parser` **`^0.4.0`**. Your application typically already instantiates **`AthenaClient`** with credentials and Region.
+Runtime dependencies: `@aws-sdk/client-athena`, `athena-query-result-parser` **`^0.5.0`**. Your application typically already instantiates **`AthenaClient`** with credentials and Region.
 
 ## Usage
 
@@ -75,11 +75,12 @@ const manifestPager = new AthenaQueryResultPager(client, {
   queryResultType: QueryResultType.DATA_MANIFEST,
 });
 
-// Parser options (athena-query-result-parser 0.4+), applied on every page parse:
+// Parser options (athena-query-result-parser 0.5+), applied on every page parse:
 const strictPager = new AthenaQueryResultPager(client, {
   parseResultSetOptions: {
     columnCountMismatchBehavior: 'throw',
     headerRowDetectionStrategy: 'safe',
+    unavailableResultBehavior: 'throw',
   },
 });
 ```
@@ -185,7 +186,7 @@ Handle the following in the calling application (or via **`AthenaClient`** confi
   - When set (**including default**), the value appears on **`fetchPage`**, **`fetchPageWith`**, and iterator-driven calls alongside **`MaxResults`**.
 - **`parseResultSetOptions?: ParseResultSetOptions`**
   - Forwarded to every **`AthenaQueryResultParser.parseResultSet`** / **`parseResultSetWith`** call on this pager.
-  - Use for **`columnCountMismatchBehavior`** (`'silent' | 'throw' | 'warn' | 'extra'`), **`skipHeaderRow`**, **`headerRowDetectionStrategy`**, **`duplicateColumnNames`**, and other options documented in **`athena-query-result-parser`**.
+  - Use for **`columnCountMismatchBehavior`** (`'silent' | 'throw' | 'warn' | 'extra'`), **`skipHeaderRow`**, **`headerRowDetectionStrategy`**, **`duplicateColumnNames`**, **`unavailableResultBehavior`**, **`maxRows`** / **`maxRowsExceededBehavior`**, and other options documented in **`athena-query-result-parser`**.
   - Import **`ParseResultSetOptions`** from **`athena-query-result-pager`** (re-exported).
   - Inspect header skipping via **`pager.getLastHeaderRowDecision()`** after a fetch.
 
@@ -216,14 +217,14 @@ Both throw if **`queryExecutionId`** is empty or whitespace-only (before invokin
 - **`PageResult<T>`** — **`{ rows: T[]; nextToken?: string; rowCount: number }`**
 - **`PagerOptions`** — **`{ maxResults?: number; queryResultType?: QueryResultType; parseResultSetOptions?: ParseResultSetOptions }`**
 - **`QueryResultType`** — enum re-exported from **`@aws-sdk/client-athena`** (**`DATA_ROWS`**, **`DATA_MANIFEST`**, …)
-- **`ParseResultSetOptions`**, **`ColumnCountMismatchBehavior`**, **`HeaderRowDecision`**, **`ParsedRow`**, **`RowParser<T>`**, **`TypedParsedRow`**, **`AthenaTypedValue`** — re-exported from **`athena-query-result-parser`**
-- **`EXTRA_COLUMNS_KEY`**, **`toNumber`**, **`toBoolean`**, **`toDate`**, **`headersFromMeta`**, **`rowToObject`**, **`rowToTypedObject`**, **`isHeaderRow`** — re-exported parser utilities
+- **`ParseResultSetOptions`**, **`ColumnCountMismatchBehavior`**, **`HeaderRowDecision`**, **`ParsedRow`**, **`RowParser<T>`**, **`TypedParsedRow`**, **`AthenaTypedValue`**, **`UnavailableResultBehavior`**, **`MaxRowsExceededBehavior`**, **`ParseResultSetUnavailableReason`**, **`ParseResultSetDiagnostics`**, **`ParseResultSetDetailedResult`**, **`ParserReusePolicy`**, **`AthenaQueryResultParserOptions`** — re-exported from **`athena-query-result-parser`**
+- **`EXTRA_COLUMNS_KEY`**, **`toNumber`**, **`toBoolean`**, **`toDate`**, **`headersFromMeta`**, **`rowToObject`**, **`rowToTypedObject`**, **`isHeaderRow`**, **`parseResultSetOnce`**, **`parseResultSetDetailedOnce`**, **`parseResultSetIterOnce`**, **`parseResultSetWithOnce`** — re-exported parser utilities
 
 ## Requirements
 
 - Node.js **`>= 20.0.0`**
 - **`@aws-sdk/client-athena`** — provide **`AthenaClient`**; **`QueryResultType`** is also re-exported by this package
-- **`athena-query-result-parser`** **`^0.4.0`**
+- **`athena-query-result-parser`** **`^0.5.0`**
 
 ## License
 

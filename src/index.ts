@@ -50,7 +50,8 @@ export interface PagerOptions {
   /**
    * Options forwarded to every {@link AthenaQueryResultParser.parseResultSet} /
    * {@link AthenaQueryResultParser.parseResultSetWith} call (for example
-   * `columnCountMismatchBehavior`, `skipHeaderRow`, `headerRowDetectionStrategy`).
+   * `columnCountMismatchBehavior`, `skipHeaderRow`, `headerRowDetectionStrategy`,
+   * `unavailableResultBehavior`, `maxRows`).
    *
    * @see ParseResultSetOptions
    */
@@ -120,7 +121,8 @@ export class AthenaQueryResultPager {
       queryResultType: options.queryResultType ?? DEFAULT_QUERY_RESULT_TYPE,
     };
     this.parseResultSetOptions = options.parseResultSetOptions;
-    this.parser = new AthenaQueryResultParser();
+    // Default reusePolicy is 'paginate': retain headers / header-row-dropped across pages of one query.
+    this.parser = AthenaQueryResultParser.create();
   }
 
   /**
@@ -339,6 +341,10 @@ export {
   EXTRA_COLUMNS_KEY,
   headersFromMeta,
   isHeaderRow,
+  parseResultSetDetailedOnce,
+  parseResultSetIterOnce,
+  parseResultSetOnce,
+  parseResultSetWithOnce,
   rowToObject,
   rowToTypedObject,
   toBoolean,
@@ -346,11 +352,18 @@ export {
   toNumber,
 } from 'athena-query-result-parser';
 export type {
+  AthenaQueryResultParserOptions,
   AthenaTypedValue,
   ColumnCountMismatchBehavior,
   HeaderRowDecision,
+  MaxRowsExceededBehavior,
+  ParseResultSetDiagnostics,
+  ParseResultSetDetailedResult,
   ParseResultSetOptions,
+  ParseResultSetUnavailableReason,
   ParsedRow,
+  ParserReusePolicy,
   RowParser,
   TypedParsedRow,
+  UnavailableResultBehavior,
 } from 'athena-query-result-parser';
