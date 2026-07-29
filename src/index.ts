@@ -69,6 +69,10 @@ export interface PagerOptions {
  * `GetQueryResults` request and {@link AthenaQueryResultParser} invocation respectively.
  * When `queryExecutionId` changes between fetches, the bundled parser is reset automatically.
  *
+ * Does not wait for query completion or add Athena-specific retry: callers should wait until the execution
+ * succeeds (for example via `GetQueryExecution`) and configure SDK / application-level retry for throttling.
+ * AWS SDK errors from `GetQueryResults` are propagated as thrown.
+ *
  * @see {@link https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/client/athena/command/GetQueryResultsCommand/ | GetQueryResultsCommand (AWS SDK)}
  */
 export class AthenaQueryResultPager {
