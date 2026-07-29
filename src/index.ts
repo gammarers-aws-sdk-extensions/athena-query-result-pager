@@ -67,6 +67,11 @@ export interface PagerOptions {
  *
  * Constructor `maxResults`, `queryResultType`, and optional `parseResultSetOptions` are applied on every
  * `GetQueryResults` request and {@link AthenaQueryResultParser} invocation respectively.
+ * When `queryExecutionId` changes between fetches, the bundled parser is reset automatically.
+ *
+ * Does not wait for query completion or add Athena-specific retry: callers should wait until the execution
+ * succeeds (for example via `GetQueryExecution`) and configure SDK / application-level retry for throttling.
+ * AWS SDK errors from `GetQueryResults` are propagated as thrown.
  *
  * @see {@link https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/client/athena/command/GetQueryResultsCommand/ | GetQueryResultsCommand (AWS SDK)}
  */
@@ -89,8 +94,10 @@ export class AthenaQueryResultPager {
   private readonly options: Required<Pick<PagerOptions, 'maxResults' | 'queryResultType'>>;
   /** Parser options applied on every page parse (undefined uses parser defaults). */
   private readonly parseResultSetOptions?: ParseResultSetOptions;
-  /** Stateful parser reused across calls; recreated by {@link AthenaQueryResultPager.reset}. */
+  /** Stateful parser reused across pages of the same execution; reset on execution change or {@link AthenaQueryResultPager.reset}. */
   private parser: AthenaQueryResultParser;
+  /** Last `queryExecutionId` passed to `fetchPage` / `fetchPageWith`; used to auto-reset the parser. */
+  private activeQueryExecutionId: string | undefined;
 
   /**
    * Creates a pager bound to `client` with optional per-request defaults.
@@ -117,9 +124,24 @@ export class AthenaQueryResultPager {
   }
 
   /**
+   * Resets the bundled parser when `queryExecutionId` differs from the previous fetch sequence.
+   *
+   * Same-execution pagination (with `nextToken`) keeps parser state so header-row handling stays correct.
+   *
+   * @param queryExecutionId - Athena query execution identifier for the upcoming fetch.
+   */
+  private readonly ensureParserForExecution = (queryExecutionId: string): void => {
+    if (this.activeQueryExecutionId !== undefined && this.activeQueryExecutionId !== queryExecutionId) {
+      this.parser.reset();
+    }
+    this.activeQueryExecutionId = queryExecutionId;
+  };
+
+  /**
    * Retrieves a single results page as dictionary-shaped {@link ParsedRow} values.
    *
    * Uses {@link AthenaQueryResultParser.parseResultSet} on the AWS response.
+   * When `queryExecutionId` differs from the previous fetch sequence, the bundled parser is reset first.
    *
    * @param queryExecutionId - Athena query execution identifier.
    * @param nextToken - Pass `undefined` first; subsequent calls use {@link PageResult.nextToken}.
@@ -133,6 +155,8 @@ export class AthenaQueryResultPager {
     if (queryExecutionId.trim() === '') {
       throw new Error('queryExecutionId must be a non-empty string');
     }
+
+    this.ensureParserForExecution(queryExecutionId);
 
     const input: GetQueryResultsCommandInput = {
       QueryExecutionId: queryExecutionId,
@@ -156,6 +180,7 @@ export class AthenaQueryResultPager {
    * Retrieves one page and maps each {@link ParsedRow} through `rowParser`.
    *
    * Uses {@link AthenaQueryResultParser.parseResultSetWith} on the AWS response.
+   * When `queryExecutionId` differs from the previous fetch sequence, the bundled parser is reset first.
    *
    * @typeParam T - Output type produced by `rowParser`.
    * @param queryExecutionId - Athena query execution identifier.
@@ -172,6 +197,8 @@ export class AthenaQueryResultPager {
     if (queryExecutionId.trim() === '') {
       throw new Error('queryExecutionId must be a non-empty string');
     }
+
+    this.ensureParserForExecution(queryExecutionId);
 
     const input: GetQueryResultsCommandInput = {
       QueryExecutionId: queryExecutionId,
@@ -287,19 +314,22 @@ export class AthenaQueryResultPager {
    *
    * Useful when {@link PagerOptions.parseResultSetOptions} uses `skipHeaderRow: 'auto'`.
    *
-   * @returns The last {@link HeaderRowDecision}, or `null` before any parse on this pager.
+   * @returns The last {@link HeaderRowDecision}, or `null` before any parse / after {@link AthenaQueryResultPager.reset}.
    */
   getLastHeaderRowDecision(): HeaderRowDecision | null {
     return this.parser.getLastHeaderRowDecision();
   }
 
   /**
-   * Clears the bundled {@link AthenaQueryResultParser} state so header-row handling does not leak between queries.
+   * Clears the bundled {@link AthenaQueryResultParser} state and the tracked active execution id.
    *
-   * Call when reusing this pager for a different `queryExecutionId` than the previous parse sequence.
+   * Usually unnecessary: {@link AthenaQueryResultPager.fetchPage} and {@link AthenaQueryResultPager.fetchPageWith}
+   * reset automatically when `queryExecutionId` changes. Call explicitly to clear state without starting a new fetch
+   * (for example so {@link AthenaQueryResultPager.getLastHeaderRowDecision} returns `null`).
    */
   reset(): void {
     this.parser.reset();
+    this.activeQueryExecutionId = undefined;
   }
 }
 
