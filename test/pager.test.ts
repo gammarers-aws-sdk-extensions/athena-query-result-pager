@@ -43,7 +43,7 @@ const createMockSend = (
 ): jest.Mock => {
   const send = jest.fn();
   let callIndex = 0;
-  send.mockImplementation(() => {
+  send.mockImplementation((command: GetQueryResultsCommand) => {
     const page = pages[callIndex];
     callIndex += 1;
     if (!page) {
@@ -52,8 +52,8 @@ const createMockSend = (
         NextToken: undefined,
       });
     }
-    // Include header row only on the first page (parser skips header once per instance)
-    const isFirstPage = callIndex === 1;
+    // Athena includes the header row only on the first page of each execution (no NextToken).
+    const isFirstPage = command.input.NextToken === undefined;
     const headerRow = Object.keys(page.rows[0] ?? {}).reduce<Record<string, string | null>>(
       (acc, col) => {
         acc[col] = col;
@@ -437,7 +437,19 @@ describe('AthenaQueryResultPager', () => {
   });
 
   describe('reset', () => {
-    it('should clear parser state for a new query execution', async () => {
+    it('should clear parser state without starting a new fetch', async () => {
+      const send = createMockSend([{ rows: [{ a: '1' }], nextToken: undefined }]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+
+      await pager.fetchPage('exec-1');
+      expect(pager.getLastHeaderRowDecision()).not.toBeNull();
+
+      pager.reset();
+      expect(pager.getLastHeaderRowDecision()).toBeNull();
+    });
+
+    it('should auto-reset parser state when queryExecutionId changes', async () => {
       const send = createMockSend([
         { rows: [{ a: '1' }], nextToken: undefined },
         { rows: [{ b: '2' }], nextToken: undefined },
@@ -446,11 +458,27 @@ describe('AthenaQueryResultPager', () => {
       const pager = new AthenaQueryResultPager(client);
 
       const page1 = await pager.fetchPage('exec-1');
-      expect(page1.rows[0]).toMatchObject({ a: '1' });
+      expect(page1.rows).toEqual([{ a: '1' }]);
 
-      pager.reset();
+      // Without auto-reset, the second execution's header row would be treated as data.
       const page2 = await pager.fetchPage('exec-2');
-      expect(page2.rows[0]).toMatchObject({ b: '2' });
+      expect(page2.rows).toEqual([{ b: '2' }]);
+    });
+
+    it('should keep parser state across pages of the same queryExecutionId', async () => {
+      const send = createMockSend([
+        { rows: [{ id: '1' }], nextToken: 'token-2' },
+        { rows: [{ id: '2' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+
+      const page1 = await pager.fetchPage('exec-1');
+      expect(page1.rows).toEqual([{ id: '1' }]);
+
+      const page2 = await pager.fetchPage('exec-1', 'token-2');
+      // Second page has no header; keeping state avoids skipping the first data row.
+      expect(page2.rows).toEqual([{ id: '2' }]);
     });
   });
 
