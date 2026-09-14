@@ -209,6 +209,82 @@ describe('AthenaQueryResultPager', () => {
     });
   });
 
+  describe('fetchPageDetailed', () => {
+    it('should return rows matching fetchPage plus parse diagnostics', async () => {
+      const send = createMockSend([{ rows: [{ id: '1', name: 'a' }], nextToken: 'token-2' }]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+
+      const detailed = await pager.fetchPageDetailed('exec-123');
+
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(detailed.rows).toHaveLength(1);
+      expect(detailed.rows[0]).toMatchObject({ id: '1', name: 'a' });
+      expect(detailed.nextToken).toBe('token-2');
+      expect(detailed.rowCount).toBe(1);
+      expect(detailed.diagnostics.unavailableReason).toBeNull();
+      expect(detailed.diagnostics.headerRowDecision).not.toBeNull();
+      expect(detailed.diagnostics.headers).toEqual(['id', 'name']);
+      expect(detailed.diagnostics.rawRowCount).toBe(2);
+      expect(detailed.diagnostics.parsedRowCount).toBe(1);
+      expect(detailed.diagnostics.truncatedByMaxRows).toBe(false);
+    });
+
+    it('should expose truncatedByMaxRows when parseResultSetOptions.maxRows truncates', async () => {
+      const send = createMockSend([
+        {
+          rows: [{ id: '1' }, { id: '2' }, { id: '3' }],
+          nextToken: undefined,
+        },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client, {
+        parseResultSetOptions: {
+          skipHeaderRow: false,
+          maxRows: 2,
+          maxRowsExceededBehavior: 'truncate',
+        },
+      });
+
+      const detailed = await pager.fetchPageDetailed('exec-1');
+
+      expect(detailed.rows).toHaveLength(2);
+      expect(detailed.diagnostics.truncatedByMaxRows).toBe(true);
+      expect(detailed.diagnostics.parsedRowCount).toBe(2);
+    });
+
+    it('should throw AthenaQueryResultPagerEmptyQueryExecutionIdError when queryExecutionId is empty or whitespace only', async () => {
+      const client = { send: jest.fn() } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+
+      await expect(pager.fetchPageDetailed('')).rejects.toThrow(AthenaQueryResultPagerEmptyQueryExecutionIdError);
+      await expect(pager.fetchPageDetailed('   ')).rejects.toThrow(AthenaQueryResultPagerEmptyQueryExecutionIdError);
+      expect(client.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('iteratePagesDetailed', () => {
+    it('should yield detailed pages until nextToken is undefined', async () => {
+      const send = createMockSend([
+        { rows: [{ x: '1' }], nextToken: 't2' },
+        { rows: [{ x: '2' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+      const pages: Array<{ rowCount: number; hasDiagnostics: boolean }> = [];
+
+      for await (const page of pager.iteratePagesDetailed('exec-1')) {
+        pages.push({ rowCount: page.rowCount, hasDiagnostics: page.diagnostics != null });
+      }
+
+      expect(pages).toEqual([
+        { rowCount: 1, hasDiagnostics: true },
+        { rowCount: 1, hasDiagnostics: true },
+      ]);
+      expect(send).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('fetchPageWith', () => {
     it('should parse rows with custom row parser', async () => {
       const send = createMockSend([
