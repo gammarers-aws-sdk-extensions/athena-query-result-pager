@@ -404,6 +404,13 @@ export {
 /** Re-exports {@link QueryResultType} from `@aws-sdk/client-athena`. */
 export { QueryResultType } from '@aws-sdk/client-athena';
 export {
+  AthenaQueryResultParserColumnCountMismatchError,
+  AthenaQueryResultParserDuplicateColumnNameError,
+  AthenaQueryResultParserError,
+  AthenaQueryResultParserHeaderRowMismatchError,
+  AthenaQueryResultParserInvalidMaxRowsError,
+  AthenaQueryResultParserMaxRowsExceededError,
+  AthenaQueryResultParserUnavailableResultError,
   EXTRA_COLUMNS_KEY,
   headersFromMeta,
   isHeaderRow,

@@ -5,6 +5,8 @@ import {
   AthenaQueryResultPagerEmptyQueryExecutionIdError,
   AthenaQueryResultPagerError,
   AthenaQueryResultPagerInvalidMaxResultsError,
+  AthenaQueryResultParserColumnCountMismatchError,
+  AthenaQueryResultParserError,
   QueryResultType,
   type PageResult,
   type ParsedRow,
@@ -584,7 +586,7 @@ describe('AthenaQueryResultPager', () => {
   });
 
   describe('parseResultSetOptions', () => {
-    it('should propagate parser errors without wrapping them in AthenaQueryResultPagerError', async () => {
+    it('should propagate AthenaQueryResultParserError without wrapping in AthenaQueryResultPagerError', async () => {
       const resultSet = {
         ResultSetMetadata: {
           ColumnInfo: [
@@ -607,33 +609,10 @@ describe('AthenaQueryResultPager', () => {
         },
       });
 
+      await expect(pager.fetchPage('exec-1')).rejects.toBeInstanceOf(AthenaQueryResultParserColumnCountMismatchError);
+      await expect(pager.fetchPage('exec-1')).rejects.toBeInstanceOf(AthenaQueryResultParserError);
       await expect(pager.fetchPage('exec-1')).rejects.not.toBeInstanceOf(AthenaQueryResultPagerError);
-    });
-
-    it('should throw when columnCountMismatchBehavior is throw and a row length mismatches', async () => {
-      const resultSet = {
-        ResultSetMetadata: {
-          ColumnInfo: [
-            { Name: 'id', Type: 'varchar' },
-            { Name: 'name', Type: 'varchar' },
-          ],
-        },
-        Rows: [
-          { Data: [{ VarCharValue: 'id' }, { VarCharValue: 'name' }] },
-          { Data: [{ VarCharValue: '1' }] },
-        ],
-      };
-      const client = {
-        send: jest.fn().mockResolvedValue({ ResultSet: resultSet, NextToken: undefined }),
-      } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client, {
-        parseResultSetOptions: {
-          skipHeaderRow: false,
-          columnCountMismatchBehavior: 'throw',
-        },
-      });
-
-      await expect(pager.fetchPage('exec-1')).rejects.toThrow();
+      await expect(pager.fetchPage('exec-1')).rejects.toMatchObject({ code: 'column-count-mismatch' });
     });
 
     it('should forward parseResultSetOptions to fetchPageWith', async () => {
