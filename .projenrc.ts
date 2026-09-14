@@ -14,7 +14,7 @@ const project = new typescript.TypeScriptProject({
   ],
   deps: [
     '@aws-sdk/client-athena@^3.983.0',
-    'athena-query-result-parser@^0.5.0',
+    'athena-query-result-parser@^0.6.0',
   ],
   releaseToNpm: true,
   npmTrustedPublishing: true,
