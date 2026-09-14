@@ -6,14 +6,13 @@ import {
   type ParsedRow,
   type RowParser,
 } from 'athena-query-result-parser';
+import {
+  AthenaQueryResultPagerEmptyQueryExecutionIdError,
+  AthenaQueryResultPagerInvalidMaxResultsError,
+} from './errors';
 
 /** Default maximum number of result rows requested per {@link AthenaQueryResultPager} API call (`MaxResults`). */
 const DEFAULT_MAX_RESULTS = 1000;
-/** Minimum `MaxResults` value allowed by Athena `GetQueryResults`. */
-const MIN_MAX_RESULTS = 1;
-/** Maximum `MaxResults` value allowed by Athena `GetQueryResults`. */
-const MAX_MAX_RESULTS = 1000;
-
 /** Default `QueryResultType` forwarded to Athena `GetQueryResults`. */
 const DEFAULT_QUERY_RESULT_TYPE = QueryResultType.DATA_ROWS;
 
@@ -105,14 +104,12 @@ export class AthenaQueryResultPager {
    *
    * @param client - SDK v3 `AthenaClient` used to call `GetQueryResults`.
    * @param options - Optional `MaxResults`, `QueryResultType`, and `ParseResultSetOptions`; defaults apply when omitted.
-   * @throws {RangeError} When `maxResults` is not an integer in `1..1000` inclusive.
+   * @throws {AthenaQueryResultPagerInvalidMaxResultsError} When `maxResults` is not an integer in `1..1000` inclusive.
    */
   constructor(client: AthenaClient, options: PagerOptions = {}) {
     const maxResults = options.maxResults ?? DEFAULT_MAX_RESULTS;
-    if (!Number.isInteger(maxResults) || maxResults < MIN_MAX_RESULTS || maxResults > MAX_MAX_RESULTS) {
-      throw new RangeError(
-        `options.maxResults must be an integer between ${MIN_MAX_RESULTS} and ${MAX_MAX_RESULTS}, got ${String(maxResults)}`,
-      );
+    if (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 1000) {
+      throw new AthenaQueryResultPagerInvalidMaxResultsError(maxResults);
     }
 
     this.client = client;
@@ -148,14 +145,14 @@ export class AthenaQueryResultPager {
    * @param queryExecutionId - Athena query execution identifier.
    * @param nextToken - Pass `undefined` first; subsequent calls use {@link PageResult.nextToken}.
    * @returns Parsed rows plus pagination metadata from this response only.
-   * @throws {Error} When `queryExecutionId` is empty or whitespace only.
+   * @throws {AthenaQueryResultPagerEmptyQueryExecutionIdError} When `queryExecutionId` is empty or whitespace only.
    */
   async fetchPage(
     queryExecutionId: string,
     nextToken?: string,
   ): Promise<PageResult<ParsedRow>> {
     if (queryExecutionId.trim() === '') {
-      throw new Error('queryExecutionId must be a non-empty string');
+      throw new AthenaQueryResultPagerEmptyQueryExecutionIdError();
     }
 
     this.ensureParserForExecution(queryExecutionId);
@@ -189,7 +186,7 @@ export class AthenaQueryResultPager {
    * @param rowParser - Converts each dictionary row into `T`.
    * @param nextToken - Pass `undefined` first; subsequent calls use {@link PageResult.nextToken}.
    * @returns Transformed rows plus pagination metadata from this response only.
-   * @throws {Error} When `queryExecutionId` is empty or whitespace only.
+   * @throws {AthenaQueryResultPagerEmptyQueryExecutionIdError} When `queryExecutionId` is empty or whitespace only.
    */
   async fetchPageWith<T>(
     queryExecutionId: string,
@@ -197,7 +194,7 @@ export class AthenaQueryResultPager {
     nextToken?: string,
   ): Promise<PageResult<T>> {
     if (queryExecutionId.trim() === '') {
-      throw new Error('queryExecutionId must be a non-empty string');
+      throw new AthenaQueryResultPagerEmptyQueryExecutionIdError();
     }
 
     this.ensureParserForExecution(queryExecutionId);
@@ -335,6 +332,11 @@ export class AthenaQueryResultPager {
   }
 }
 
+export {
+  AthenaQueryResultPagerEmptyQueryExecutionIdError,
+  AthenaQueryResultPagerError,
+  AthenaQueryResultPagerInvalidMaxResultsError,
+} from './errors';
 /** Re-exports {@link QueryResultType} from `@aws-sdk/client-athena`. */
 export { QueryResultType } from '@aws-sdk/client-athena';
 export {
