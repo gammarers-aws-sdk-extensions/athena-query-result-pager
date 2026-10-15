@@ -2,6 +2,7 @@ import { AthenaClient, GetQueryResultsCommand } from '@aws-sdk/client-athena';
 import type { GetQueryResultsCommandOutput } from '@aws-sdk/client-athena';
 import {
   AthenaQueryResultPager,
+  AthenaQueryResultPagerConcurrentAccessError,
   AthenaQueryResultPagerEmptyQueryExecutionIdError,
   AthenaQueryResultPagerError,
   AthenaQueryResultPagerInvalidMaxResultsError,
@@ -86,7 +87,7 @@ describe('AthenaQueryResultPager', () => {
     it('should use default options when not provided', async () => {
       const client = { send: jest.fn().mockResolvedValue({ ResultSet: createMockResultSet([]), NextToken: undefined }) } as unknown as AthenaClient;
       const pager = new AthenaQueryResultPager(client);
-      await pager.fetchPage('exec-1');
+      await pager.forExecution('exec-1').fetchPage();
       expect(client.send).toHaveBeenCalledWith(
         expect.objectContaining({
           input: expect.objectContaining({
@@ -105,7 +106,7 @@ describe('AthenaQueryResultPager', () => {
         maxResults: 100,
         queryResultType: QueryResultType.DATA_MANIFEST,
       });
-      await pager.fetchPage('exec-1');
+      await pager.forExecution('exec-1').fetchPage();
       expect(client.send).toHaveBeenCalledWith(
         expect.objectContaining({
           input: expect.objectContaining({
@@ -137,7 +138,7 @@ describe('AthenaQueryResultPager', () => {
         parseResultSetOptions: { skipHeaderRow: false },
       });
 
-      const result = await pager.fetchPage('exec-1');
+      const result = await pager.forExecution('exec-1').fetchPage();
 
       expect(result.rows).toHaveLength(2);
       expect(result.rows[0]).toMatchObject({ id: 'id' });
@@ -145,13 +146,27 @@ describe('AthenaQueryResultPager', () => {
     });
   });
 
+  describe('forExecution', () => {
+    it('should throw AthenaQueryResultPagerEmptyQueryExecutionIdError when queryExecutionId is empty or whitespace only', () => {
+      const client = { send: jest.fn() } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+
+      expect(() => pager.forExecution('')).toThrow(AthenaQueryResultPagerEmptyQueryExecutionIdError);
+      expect(() => pager.forExecution('   ')).toThrow(AthenaQueryResultPagerEmptyQueryExecutionIdError);
+      expect(() => pager.forExecution('')).toThrow(
+        expect.objectContaining({ code: 'empty-query-execution-id' }),
+      );
+      expect(client.send).not.toHaveBeenCalled();
+    });
+  });
+
   describe('fetchPage', () => {
     it('should call GetQueryResults with queryExecutionId and nextToken', async () => {
       const send = createMockSend([{ rows: [{ id: '1', name: 'a' }], nextToken: undefined }]);
       const client = { send } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-123');
 
-      const result = await pager.fetchPage('exec-123');
+      const result = await execution.fetchPage();
 
       expect(send).toHaveBeenCalledTimes(1);
       expect(send).toHaveBeenCalledWith(expect.any(GetQueryResultsCommand));
@@ -174,12 +189,12 @@ describe('AthenaQueryResultPager', () => {
         { rows: [{ id: '2' }], nextToken: undefined },
       ]);
       const client = { send } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
 
-      const page1 = await pager.fetchPage('exec-1');
+      const page1 = await execution.fetchPage();
       expect(page1.nextToken).toBe('token-2');
 
-      const page2 = await pager.fetchPage('exec-1', 'token-2');
+      const page2 = await execution.fetchPage('token-2');
       expect(send).toHaveBeenCalledTimes(2);
       expect(send).toHaveBeenLastCalledWith(expect.any(GetQueryResultsCommand));
 
@@ -199,25 +214,15 @@ describe('AthenaQueryResultPager', () => {
 
       expect(page2.nextToken).toBeUndefined();
     });
-
-    it('should throw AthenaQueryResultPagerEmptyQueryExecutionIdError when queryExecutionId is empty or whitespace only', async () => {
-      const client = { send: jest.fn() } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
-
-      await expect(pager.fetchPage('')).rejects.toThrow(AthenaQueryResultPagerEmptyQueryExecutionIdError);
-      await expect(pager.fetchPage('   ')).rejects.toThrow(AthenaQueryResultPagerEmptyQueryExecutionIdError);
-      await expect(pager.fetchPage('')).rejects.toMatchObject({ code: 'empty-query-execution-id' });
-      expect(client.send).not.toHaveBeenCalled();
-    });
   });
 
   describe('fetchPageDetailed', () => {
     it('should return rows matching fetchPage plus parse diagnostics', async () => {
       const send = createMockSend([{ rows: [{ id: '1', name: 'a' }], nextToken: 'token-2' }]);
       const client = { send } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-123');
 
-      const detailed = await pager.fetchPageDetailed('exec-123');
+      const detailed = await execution.fetchPageDetailed();
 
       expect(send).toHaveBeenCalledTimes(1);
       expect(detailed.rows).toHaveLength(1);
@@ -248,20 +253,11 @@ describe('AthenaQueryResultPager', () => {
         },
       });
 
-      const detailed = await pager.fetchPageDetailed('exec-1');
+      const detailed = await pager.forExecution('exec-1').fetchPageDetailed();
 
       expect(detailed.rows).toHaveLength(2);
       expect(detailed.diagnostics.truncatedByMaxRows).toBe(true);
       expect(detailed.diagnostics.parsedRowCount).toBe(2);
-    });
-
-    it('should throw AthenaQueryResultPagerEmptyQueryExecutionIdError when queryExecutionId is empty or whitespace only', async () => {
-      const client = { send: jest.fn() } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
-
-      await expect(pager.fetchPageDetailed('')).rejects.toThrow(AthenaQueryResultPagerEmptyQueryExecutionIdError);
-      await expect(pager.fetchPageDetailed('   ')).rejects.toThrow(AthenaQueryResultPagerEmptyQueryExecutionIdError);
-      expect(client.send).not.toHaveBeenCalled();
     });
   });
 
@@ -272,10 +268,10 @@ describe('AthenaQueryResultPager', () => {
         { rows: [{ x: '2' }], nextToken: undefined },
       ]);
       const client = { send } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
       const pages: Array<{ rowCount: number; hasDiagnostics: boolean }> = [];
 
-      for await (const page of pager.iteratePagesDetailed('exec-1')) {
+      for await (const page of execution.iteratePagesDetailed()) {
         pages.push({ rowCount: page.rowCount, hasDiagnostics: page.diagnostics != null });
       }
 
@@ -299,14 +295,14 @@ describe('AthenaQueryResultPager', () => {
         },
       ]);
       const client = { send } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
       type User = { id: string; name: string };
       const rowParser = (row: ParsedRow): User => ({
         id: String(row.id ?? ''),
         name: String(row.name ?? ''),
       });
 
-      const result = await pager.fetchPageWith<User>('exec-1', rowParser);
+      const result = await execution.fetchPageWith<User>(rowParser);
 
       expect(send).toHaveBeenCalledTimes(1);
       expect(send).toHaveBeenCalledWith(expect.any(GetQueryResultsCommand));
@@ -331,7 +327,7 @@ describe('AthenaQueryResultPager', () => {
       const pager = new AthenaQueryResultPager(client, { queryResultType: QueryResultType.DATA_MANIFEST });
       const rowParser = (row: ParsedRow): ParsedRow => row;
 
-      await pager.fetchPageWith('exec-ms', rowParser);
+      await pager.forExecution('exec-ms').fetchPageWith(rowParser);
 
       expect(send.mock.calls[0][0].input).toMatchObject({
         QueryExecutionId: 'exec-ms',
@@ -340,26 +336,16 @@ describe('AthenaQueryResultPager', () => {
         NextToken: undefined,
       });
     });
-
-    it('should throw AthenaQueryResultPagerEmptyQueryExecutionIdError when queryExecutionId is empty or whitespace only', async () => {
-      const client = { send: jest.fn() } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
-      const rowParser = (row: ParsedRow): ParsedRow => row;
-
-      await expect(pager.fetchPageWith('', rowParser)).rejects.toThrow(AthenaQueryResultPagerEmptyQueryExecutionIdError);
-      await expect(pager.fetchPageWith('   ', rowParser)).rejects.toThrow(AthenaQueryResultPagerEmptyQueryExecutionIdError);
-      expect(client.send).not.toHaveBeenCalled();
-    });
   });
 
   describe('iteratePages', () => {
     it('should yield one page when there is no nextToken', async () => {
       const send = createMockSend([{ rows: [{ x: '1' }], nextToken: undefined }]);
       const client = { send } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
       const pages: PageResult<ParsedRow>[] = [];
 
-      for await (const page of pager.iteratePages('exec-1')) {
+      for await (const page of execution.iteratePages()) {
         pages.push(page);
       }
 
@@ -376,10 +362,10 @@ describe('AthenaQueryResultPager', () => {
         { rows: [{ x: '3' }], nextToken: undefined },
       ]);
       const client = { send } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
       const pages: PageResult<ParsedRow>[] = [];
 
-      for await (const page of pager.iteratePages('exec-1')) {
+      for await (const page of execution.iteratePages()) {
         pages.push(page);
       }
 
@@ -408,7 +394,7 @@ describe('AthenaQueryResultPager', () => {
       const pager = new AthenaQueryResultPager(client, { maxResults: 500, queryResultType: QueryResultType.DATA_MANIFEST });
 
       let pageCount = 0;
-      for await (const page of pager.iteratePages('exec-1')) {
+      for await (const page of pager.forExecution('exec-1').iteratePages()) {
         expect(page.rows).toHaveLength(1);
         pageCount += 1;
       }
@@ -431,12 +417,12 @@ describe('AthenaQueryResultPager', () => {
         { rows: [{ id: '1' }], nextToken: undefined },
       ]);
       const client = { send } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
       type Item = { id: string };
       const rowParser = (row: ParsedRow): Item => ({ id: String(row.id ?? '') });
       const pages: PageResult<Item>[] = [];
 
-      for await (const page of pager.iteratePagesWith('exec-1', rowParser)) {
+      for await (const page of execution.iteratePagesWith(rowParser)) {
         pages.push(page);
       }
 
@@ -457,12 +443,12 @@ describe('AthenaQueryResultPager', () => {
         { rows: [{ id: '3' }], nextToken: undefined },
       ]);
       const client = { send } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
       type Item = { id: string };
       const rowParser = (row: ParsedRow): Item => ({ id: String(row.id ?? '') });
       const pages: PageResult<Item>[] = [];
 
-      for await (const page of pager.iteratePagesWith('exec-1', rowParser)) {
+      for await (const page of execution.iteratePagesWith(rowParser)) {
         pages.push(page);
       }
 
@@ -490,10 +476,10 @@ describe('AthenaQueryResultPager', () => {
         { rows: [{ id: '3' }], nextToken: undefined },
       ]);
       const client = { send } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
       const rows: ParsedRow[] = [];
 
-      for await (const row of pager.iterateRows('exec-1')) {
+      for await (const row of execution.iterateRows()) {
         rows.push(row);
       }
 
@@ -509,12 +495,12 @@ describe('AthenaQueryResultPager', () => {
         { rows: [{ id: '3' }], nextToken: undefined },
       ]);
       const client = { send } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
       type Item = { id: string };
       const rowParser = (row: ParsedRow): Item => ({ id: String(row.id ?? '') });
       const rows: Item[] = [];
 
-      for await (const row of pager.iterateRows('exec-1', rowParser)) {
+      for await (const row of execution.iterateRows(rowParser)) {
         rows.push(row);
       }
 
@@ -529,16 +515,16 @@ describe('AthenaQueryResultPager', () => {
     it('should clear parser state without starting a new fetch', async () => {
       const send = createMockSend([{ rows: [{ a: '1' }], nextToken: undefined }]);
       const client = { send } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
 
-      await pager.fetchPage('exec-1');
-      expect(pager.getLastHeaderRowDecision()).not.toBeNull();
+      await execution.fetchPage();
+      expect(execution.getLastHeaderRowDecision()).not.toBeNull();
 
-      pager.reset();
-      expect(pager.getLastHeaderRowDecision()).toBeNull();
+      execution.reset();
+      expect(execution.getLastHeaderRowDecision()).toBeNull();
     });
 
-    it('should auto-reset parser state when queryExecutionId changes', async () => {
+    it('should isolate parser state across separate forExecution handles', async () => {
       const send = createMockSend([
         { rows: [{ a: '1' }], nextToken: undefined },
         { rows: [{ b: '2' }], nextToken: undefined },
@@ -546,26 +532,26 @@ describe('AthenaQueryResultPager', () => {
       const client = { send } as unknown as AthenaClient;
       const pager = new AthenaQueryResultPager(client);
 
-      const page1 = await pager.fetchPage('exec-1');
+      const page1 = await pager.forExecution('exec-1').fetchPage();
       expect(page1.rows).toEqual([{ a: '1' }]);
 
-      // Without auto-reset, the second execution's header row would be treated as data.
-      const page2 = await pager.fetchPage('exec-2');
+      // Separate handles keep independent parsers so header-row handling does not leak.
+      const page2 = await pager.forExecution('exec-2').fetchPage();
       expect(page2.rows).toEqual([{ b: '2' }]);
     });
 
-    it('should keep parser state across pages of the same queryExecutionId', async () => {
+    it('should keep parser state across pages of the same execution handle', async () => {
       const send = createMockSend([
         { rows: [{ id: '1' }], nextToken: 'token-2' },
         { rows: [{ id: '2' }], nextToken: undefined },
       ]);
       const client = { send } as unknown as AthenaClient;
-      const pager = new AthenaQueryResultPager(client);
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
 
-      const page1 = await pager.fetchPage('exec-1');
+      const page1 = await execution.fetchPage();
       expect(page1.rows).toEqual([{ id: '1' }]);
 
-      const page2 = await pager.fetchPage('exec-1', 'token-2');
+      const page2 = await execution.fetchPage('token-2');
       // Second page has no header; keeping state avoids skipping the first data row.
       expect(page2.rows).toEqual([{ id: '2' }]);
     });
@@ -575,13 +561,67 @@ describe('AthenaQueryResultPager', () => {
     it('should return null before parsing and a decision after fetchPage', async () => {
       const send = createMockSend([{ rows: [{ id: '1' }], nextToken: undefined }]);
       const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+
+      expect(execution.getLastHeaderRowDecision()).toBeNull();
+
+      await execution.fetchPage();
+
+      expect(execution.getLastHeaderRowDecision()).not.toBeNull();
+    });
+  });
+
+  describe('concurrent access', () => {
+    it('should throw AthenaQueryResultPagerConcurrentAccessError when fetchPage overlaps on the same handle', async () => {
+      let resolveFirst!: (value: unknown) => void;
+      const firstResponse = new Promise((resolve) => {
+        resolveFirst = resolve;
+      });
+      const send = jest.fn().mockImplementationOnce(() => firstResponse);
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+
+      const firstFetch = execution.fetchPage();
+      await expect(execution.fetchPage()).rejects.toThrow(AthenaQueryResultPagerConcurrentAccessError);
+      await expect(execution.fetchPage()).rejects.toMatchObject({ code: 'concurrent-access' });
+
+      resolveFirst({
+        ResultSet: createMockResultSet([{ id: 'id' }, { id: '1' }]),
+        NextToken: undefined,
+      });
+      await firstFetch;
+    });
+
+    it('should throw AthenaQueryResultPagerConcurrentAccessError when fetch overlaps an active iteration', async () => {
+      const send = createMockSend([
+        { rows: [{ id: '1' }], nextToken: 't2' },
+        { rows: [{ id: '2' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+      const iterator = execution.iteratePages();
+
+      await iterator.next();
+      await expect(execution.fetchPage()).rejects.toThrow(AthenaQueryResultPagerConcurrentAccessError);
+
+      await iterator.return(undefined);
+    });
+
+    it('should allow concurrent fetch on separate forExecution handles', async () => {
+      const send = createMockSend([
+        { rows: [{ a: '1' }], nextToken: undefined },
+        { rows: [{ b: '2' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
       const pager = new AthenaQueryResultPager(client);
+      const exec1 = pager.forExecution('exec-1');
+      const exec2 = pager.forExecution('exec-2');
 
-      expect(pager.getLastHeaderRowDecision()).toBeNull();
+      const [page1, page2] = await Promise.all([exec1.fetchPage(), exec2.fetchPage()]);
 
-      await pager.fetchPage('exec-1');
-
-      expect(pager.getLastHeaderRowDecision()).not.toBeNull();
+      expect(page1.rows).toEqual([{ a: '1' }]);
+      expect(page2.rows).toEqual([{ b: '2' }]);
+      expect(send).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -608,11 +648,12 @@ describe('AthenaQueryResultPager', () => {
           columnCountMismatchBehavior: 'throw',
         },
       });
+      const execution = pager.forExecution('exec-1');
 
-      await expect(pager.fetchPage('exec-1')).rejects.toBeInstanceOf(AthenaQueryResultParserColumnCountMismatchError);
-      await expect(pager.fetchPage('exec-1')).rejects.toBeInstanceOf(AthenaQueryResultParserError);
-      await expect(pager.fetchPage('exec-1')).rejects.not.toBeInstanceOf(AthenaQueryResultPagerError);
-      await expect(pager.fetchPage('exec-1')).rejects.toMatchObject({ code: 'column-count-mismatch' });
+      await expect(execution.fetchPage()).rejects.toBeInstanceOf(AthenaQueryResultParserColumnCountMismatchError);
+      await expect(execution.fetchPage()).rejects.toBeInstanceOf(AthenaQueryResultParserError);
+      await expect(execution.fetchPage()).rejects.not.toBeInstanceOf(AthenaQueryResultPagerError);
+      await expect(execution.fetchPage()).rejects.toMatchObject({ code: 'column-count-mismatch' });
     });
 
     it('should forward parseResultSetOptions to fetchPageWith', async () => {
@@ -624,7 +665,7 @@ describe('AthenaQueryResultPager', () => {
       type Item = { id: string };
       const rowParser = (row: ParsedRow): Item => ({ id: String(row.id ?? '') });
 
-      const result = await pager.fetchPageWith('exec-1', rowParser);
+      const result = await pager.forExecution('exec-1').fetchPageWith(rowParser);
 
       expect(result.rows).toHaveLength(2);
       expect(result.rows[0]).toEqual({ id: 'id' });
