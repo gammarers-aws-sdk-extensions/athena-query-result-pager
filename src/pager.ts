@@ -13,14 +13,14 @@ import {
   type ParsedRow,
   type RowParser,
 } from 'athena-query-result-parser';
+import { DEFAULT_MAX_RESULTS, MAX_MAX_RESULTS, MIN_MAX_RESULTS } from './core/consts';
 import {
   AthenaQueryResultPagerConcurrentAccessError,
   AthenaQueryResultPagerEmptyQueryExecutionIdError,
   AthenaQueryResultPagerInvalidMaxResultsError,
-} from './errors';
+} from './core/errors';
+import { hasNextPageToken, isBlankQueryExecutionId } from './core/pager-predicates';
 
-/** Default maximum number of result rows requested per {@link AthenaQueryResultPager} API call (`MaxResults`). */
-const DEFAULT_MAX_RESULTS = 1000;
 /** Default `QueryResultType` forwarded to Athena `GetQueryResults`. */
 const DEFAULT_QUERY_RESULT_TYPE = QueryResultType.DATA_ROWS;
 
@@ -96,9 +96,8 @@ export class AthenaQueryResultPager {
    * @param pageResult - The most recently retrieved page from `fetchPage`, `fetchPageWith`, or a page iterator.
    * @returns `true` when {@link PageResult.nextToken} is defined and another page should be fetched.
    */
-  static hasNextPage<T>(pageResult: PageResult<T>): boolean {
-    return pageResult.nextToken !== undefined;
-  }
+  static readonly hasNextPage = <T>(pageResult: PageResult<T>): boolean =>
+    hasNextPageToken(pageResult.nextToken);
 
   /** SDK v3 client used for every `GetQueryResults` call. */
   private readonly client: AthenaClient;
@@ -116,7 +115,11 @@ export class AthenaQueryResultPager {
    */
   constructor(client: AthenaClient, options: PagerOptions = {}) {
     const maxResults = options.maxResults ?? DEFAULT_MAX_RESULTS;
-    if (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 1000) {
+    if (
+      !Number.isInteger(maxResults)
+      || maxResults < MIN_MAX_RESULTS
+      || maxResults > MAX_MAX_RESULTS
+    ) {
       throw new AthenaQueryResultPagerInvalidMaxResultsError(maxResults);
     }
 
@@ -138,18 +141,18 @@ export class AthenaQueryResultPager {
    * @returns A handle bound to `queryExecutionId`.
    * @throws {AthenaQueryResultPagerEmptyQueryExecutionIdError} When `queryExecutionId` is empty or whitespace only.
    */
-  forExecution(queryExecutionId: string): AthenaQueryExecutionPager {
-    if (queryExecutionId.trim() === '') {
+  readonly forExecution = (queryExecutionId: string): AthenaQueryExecutionPager => {
+    if (isBlankQueryExecutionId(queryExecutionId)) {
       throw new AthenaQueryResultPagerEmptyQueryExecutionIdError();
     }
 
-    return new AthenaQueryExecutionPager(
+    return AthenaQueryExecutionPager.create(
       this.client,
       this.options,
       this.parseResultSetOptions,
       queryExecutionId,
     );
-  }
+  };
 }
 
 /**
@@ -166,6 +169,24 @@ export class AthenaQueryResultPager {
  * Create via {@link AthenaQueryResultPager.forExecution}.
  */
 export class AthenaQueryExecutionPager {
+
+  /**
+   * Prefer {@link AthenaQueryResultPager.forExecution}. Validates `queryExecutionId` and builds a handle.
+   *
+   * @param client - SDK v3 `AthenaClient` used to call `GetQueryResults`.
+   * @param options - Normalized `MaxResults` and `QueryResultType`.
+   * @param parseResultSetOptions - Options forwarded to every parse call.
+   * @param queryExecutionId - Non-empty Athena query execution identifier.
+   * @returns A new execution-scoped pager.
+   * @throws {AthenaQueryResultPagerEmptyQueryExecutionIdError} When `queryExecutionId` is empty or whitespace only.
+   */
+  static readonly create = (
+    client: AthenaClient,
+    options: NormalizedPagerOptions,
+    parseResultSetOptions: ParseResultSetOptions | undefined,
+    queryExecutionId: string,
+  ): AthenaQueryExecutionPager =>
+    new AthenaQueryExecutionPager(client, options, parseResultSetOptions, queryExecutionId);
 
   /** SDK v3 client used for every `GetQueryResults` call. */
   private readonly client: AthenaClient;
@@ -186,13 +207,13 @@ export class AthenaQueryExecutionPager {
    * @param parseResultSetOptions - Options forwarded to every parse call.
    * @param queryExecutionId - Non-empty Athena query execution identifier.
    */
-  constructor(
+  private constructor(
     client: AthenaClient,
     options: NormalizedPagerOptions,
     parseResultSetOptions: ParseResultSetOptions | undefined,
     queryExecutionId: string,
   ) {
-    if (queryExecutionId.trim() === '') {
+    if (isBlankQueryExecutionId(queryExecutionId)) {
       throw new AthenaQueryResultPagerEmptyQueryExecutionIdError();
     }
 
@@ -256,82 +277,6 @@ export class AthenaQueryExecutionPager {
 
     return this.client.send(new GetQueryResultsCommand(input));
   };
-
-  /**
-   * Retrieves a single results page as dictionary-shaped {@link ParsedRow} values.
-   *
-   * Uses {@link AthenaQueryResultParser.parseResultSet} on the AWS response.
-   *
-   * @param nextToken - Pass `undefined` first; subsequent calls use {@link PageResult.nextToken}.
-   * @returns Parsed rows plus pagination metadata from this response only.
-   * @throws {AthenaQueryResultPagerConcurrentAccessError} When another operation is already in flight.
-   */
-  async fetchPage(nextToken?: string): Promise<PageResult<ParsedRow>> {
-    return this.runExclusive(async () => {
-      const response = await this.sendGetQueryResults(nextToken);
-      const rows = this.parser.parseResultSet(response.ResultSet, this.parseResultSetOptions);
-
-      return {
-        rows,
-        nextToken: response.NextToken,
-        rowCount: rows.length,
-      };
-    });
-  }
-
-  /**
-   * Retrieves one page as {@link ParsedRow} values plus {@link ParseResultSetDiagnostics}.
-   *
-   * Uses {@link AthenaQueryResultParser.parseResultSetDetailed} on the AWS response.
-   *
-   * @param nextToken - Pass `undefined` first; subsequent calls use {@link PageDetailedResult.nextToken}.
-   * @returns Parsed rows, pagination metadata, and parser diagnostics for this response only.
-   * @throws {AthenaQueryResultPagerConcurrentAccessError} When another operation is already in flight.
-   */
-  async fetchPageDetailed(nextToken?: string): Promise<PageDetailedResult> {
-    return this.runExclusive(async () => {
-      const response = await this.sendGetQueryResults(nextToken);
-      const parsed = this.parser.parseResultSetDetailed(response.ResultSet, this.parseResultSetOptions);
-
-      return {
-        rows: parsed.rows,
-        nextToken: response.NextToken,
-        rowCount: parsed.rows.length,
-        diagnostics: parsed.diagnostics,
-      };
-    });
-  }
-
-  /**
-   * Retrieves one page and maps each {@link ParsedRow} through `rowParser`.
-   *
-   * Uses {@link AthenaQueryResultParser.parseResultSetWith} on the AWS response.
-   *
-   * @typeParam T - Output type produced by `rowParser`.
-   * @param rowParser - Converts each dictionary row into `T`.
-   * @param nextToken - Pass `undefined` first; subsequent calls use {@link PageResult.nextToken}.
-   * @returns Transformed rows plus pagination metadata from this response only.
-   * @throws {AthenaQueryResultPagerConcurrentAccessError} When another operation is already in flight.
-   */
-  async fetchPageWith<T>(
-    rowParser: RowParser<T>,
-    nextToken?: string,
-  ): Promise<PageResult<T>> {
-    return this.runExclusive(async () => {
-      const response = await this.sendGetQueryResults(nextToken);
-      const rows = this.parser.parseResultSetWith(
-        response.ResultSet,
-        rowParser,
-        this.parseResultSetOptions,
-      );
-
-      return {
-        rows,
-        nextToken: response.NextToken,
-        rowCount: rows.length,
-      };
-    });
-  }
 
   /**
    * Fetches one {@link ParsedRow} page without taking exclusive access (caller must already hold it).
@@ -399,6 +344,47 @@ export class AthenaQueryExecutionPager {
   };
 
   /**
+   * Retrieves a single results page as dictionary-shaped {@link ParsedRow} values.
+   *
+   * Uses {@link AthenaQueryResultParser.parseResultSet} on the AWS response.
+   *
+   * @param nextToken - Pass `undefined` first; subsequent calls use {@link PageResult.nextToken}.
+   * @returns Parsed rows plus pagination metadata from this response only.
+   * @throws {AthenaQueryResultPagerConcurrentAccessError} When another operation is already in flight.
+   */
+  readonly fetchPage = async (nextToken?: string): Promise<PageResult<ParsedRow>> =>
+    this.runExclusive(() => this.fetchPageUnlocked(nextToken));
+
+  /**
+   * Retrieves one page as {@link ParsedRow} values plus {@link ParseResultSetDiagnostics}.
+   *
+   * Uses {@link AthenaQueryResultParser.parseResultSetDetailed} on the AWS response.
+   *
+   * @param nextToken - Pass `undefined` first; subsequent calls use {@link PageDetailedResult.nextToken}.
+   * @returns Parsed rows, pagination metadata, and parser diagnostics for this response only.
+   * @throws {AthenaQueryResultPagerConcurrentAccessError} When another operation is already in flight.
+   */
+  readonly fetchPageDetailed = async (nextToken?: string): Promise<PageDetailedResult> =>
+    this.runExclusive(() => this.fetchPageDetailedUnlocked(nextToken));
+
+  /**
+   * Retrieves one page and maps each {@link ParsedRow} through `rowParser`.
+   *
+   * Uses {@link AthenaQueryResultParser.parseResultSetWith} on the AWS response.
+   *
+   * @typeParam T - Output type produced by `rowParser`.
+   * @param rowParser - Converts each dictionary row into `T`.
+   * @param nextToken - Pass `undefined` first; subsequent calls use {@link PageResult.nextToken}.
+   * @returns Transformed rows plus pagination metadata from this response only.
+   * @throws {AthenaQueryResultPagerConcurrentAccessError} When another operation is already in flight.
+   */
+  readonly fetchPageWith = async <T>(
+    rowParser: RowParser<T>,
+    nextToken?: string,
+  ): Promise<PageResult<T>> =>
+    this.runExclusive(() => this.fetchPageWithUnlocked(rowParser, nextToken));
+
+  /**
    * Lazily walks all pages for this execution, yielding one {@link PageResult} of {@link ParsedRow} per step.
    *
    * Holds exclusive access for the entire iteration (from first `next()` until completion or early return).
@@ -415,7 +401,7 @@ export class AthenaQueryExecutionPager {
         const page = await this.fetchPageUnlocked(nextToken);
         yield page;
         nextToken = page.nextToken;
-      } while (nextToken);
+      } while (hasNextPageToken(nextToken));
     } finally {
       this.leave();
     }
@@ -438,7 +424,7 @@ export class AthenaQueryExecutionPager {
         const page = await this.fetchPageDetailedUnlocked(nextToken);
         yield page;
         nextToken = page.nextToken;
-      } while (nextToken);
+      } while (hasNextPageToken(nextToken));
     } finally {
       this.leave();
     }
@@ -465,7 +451,7 @@ export class AthenaQueryExecutionPager {
         const page = await this.fetchPageWithUnlocked(rowParser, nextToken);
         yield page;
         nextToken = page.nextToken;
-      } while (nextToken);
+      } while (hasNextPageToken(nextToken));
     } finally {
       this.leave();
     }
@@ -513,7 +499,7 @@ export class AthenaQueryExecutionPager {
           yield row;
         }
         nextToken = page.nextToken;
-      } while (nextToken);
+      } while (hasNextPageToken(nextToken));
     } finally {
       this.leave();
     }
@@ -526,9 +512,8 @@ export class AthenaQueryExecutionPager {
    *
    * @returns The last {@link HeaderRowDecision}, or `null` before any parse / after {@link AthenaQueryExecutionPager.reset}.
    */
-  getLastHeaderRowDecision(): HeaderRowDecision | null {
-    return this.parser.getLastHeaderRowDecision();
-  }
+  readonly getLastHeaderRowDecision = (): HeaderRowDecision | null =>
+    this.parser.getLastHeaderRowDecision();
 
   /**
    * Clears this handle's {@link AthenaQueryResultParser} state.
@@ -537,7 +522,7 @@ export class AthenaQueryExecutionPager {
    * (for example so {@link AthenaQueryExecutionPager.getLastHeaderRowDecision} returns `null`).
    * Prefer a new {@link AthenaQueryResultPager.forExecution} handle for a different query.
    */
-  reset(): void {
+  readonly reset = (): void => {
     this.parser.reset();
-  }
+  };
 }

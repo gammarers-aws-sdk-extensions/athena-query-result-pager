@@ -1,6 +1,7 @@
 import { AthenaClient, GetQueryResultsCommand } from '@aws-sdk/client-athena';
 import type { GetQueryResultsCommandOutput } from '@aws-sdk/client-athena';
 import {
+  AthenaQueryExecutionPager,
   AthenaQueryResultPager,
   AthenaQueryResultPagerConcurrentAccessError,
   AthenaQueryResultPagerEmptyQueryExecutionIdError,
@@ -157,6 +158,19 @@ describe('AthenaQueryResultPager', () => {
         expect.objectContaining({ code: 'empty-query-execution-id' }),
       );
       expect(client.send).not.toHaveBeenCalled();
+    });
+
+    it('should reject blank queryExecutionId from AthenaQueryExecutionPager.create', () => {
+      const client = { send: jest.fn() } as unknown as AthenaClient;
+
+      expect(() =>
+        AthenaQueryExecutionPager.create(
+          client,
+          { maxResults: 1000, queryResultType: QueryResultType.DATA_ROWS },
+          undefined,
+          '',
+        ),
+      ).toThrow(AthenaQueryResultPagerEmptyQueryExecutionIdError);
     });
   });
 
