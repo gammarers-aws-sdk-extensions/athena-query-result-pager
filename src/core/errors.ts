@@ -1,9 +1,9 @@
-/** Minimum `MaxResults` value allowed by Athena `GetQueryResults`. */
-const MIN_MAX_RESULTS = 1;
-/** Maximum `MaxResults` value allowed by Athena `GetQueryResults`. */
-const MAX_MAX_RESULTS = 1000;
+import { MAX_MAX_RESULTS, MIN_MAX_RESULTS } from './consts';
 
 const EMPTY_QUERY_EXECUTION_ID_MESSAGE = 'queryExecutionId must be a non-empty string';
+
+const CONCURRENT_ACCESS_MESSAGE =
+  'concurrent fetch or iteration is not allowed on the same AthenaQueryExecutionPager';
 
 const describeInvalidMaxResults = (maxResults: number): string =>
   `options.maxResults must be an integer between ${MIN_MAX_RESULTS} and ${MAX_MAX_RESULTS}, got ${String(maxResults)}`;
@@ -18,6 +18,8 @@ const describeInvalidMaxResults = (maxResults: number): string =>
  * remain {@link AthenaQueryResultParserError} (or subclasses) when thrown by the parser.
  */
 export abstract class AthenaQueryResultPagerError extends Error {
+  override readonly name: string = 'AthenaQueryResultPagerError';
+
   /**
    * Stable error code for logging, metrics, and programmatic handling.
    */
@@ -25,19 +27,21 @@ export abstract class AthenaQueryResultPagerError extends Error {
 
   protected constructor(message: string) {
     super(message);
-    this.name = new.target.name;
-    Object.setPrototypeOf(this, new.target.prototype);
+    Object.setPrototypeOf(this, AthenaQueryResultPagerError.prototype);
   }
 }
 
 /**
- * Thrown when `queryExecutionId` is empty or whitespace only.
+ * Thrown when `queryExecutionId` is empty or whitespace only
+ * (for example on {@link AthenaQueryResultPager.forExecution}).
  */
 export class AthenaQueryResultPagerEmptyQueryExecutionIdError extends AthenaQueryResultPagerError {
+  override readonly name: string = 'AthenaQueryResultPagerEmptyQueryExecutionIdError';
   readonly code = 'empty-query-execution-id' as const;
 
   constructor() {
     super(EMPTY_QUERY_EXECUTION_ID_MESSAGE);
+    Object.setPrototypeOf(this, AthenaQueryResultPagerEmptyQueryExecutionIdError.prototype);
   }
 }
 
@@ -45,6 +49,7 @@ export class AthenaQueryResultPagerEmptyQueryExecutionIdError extends AthenaQuer
  * Thrown when `options.maxResults` is not an integer in `1..1000` inclusive.
  */
 export class AthenaQueryResultPagerInvalidMaxResultsError extends AthenaQueryResultPagerError {
+  override readonly name: string = 'AthenaQueryResultPagerInvalidMaxResultsError';
   readonly code = 'invalid-max-results' as const;
 
   /**
@@ -55,5 +60,20 @@ export class AthenaQueryResultPagerInvalidMaxResultsError extends AthenaQueryRes
   constructor(maxResults: number) {
     super(describeInvalidMaxResults(maxResults));
     this.maxResults = maxResults;
+    Object.setPrototypeOf(this, AthenaQueryResultPagerInvalidMaxResultsError.prototype);
+  }
+}
+
+/**
+ * Thrown when a second fetch or iteration starts on the same execution handle
+ * while another operation is still in flight.
+ */
+export class AthenaQueryResultPagerConcurrentAccessError extends AthenaQueryResultPagerError {
+  override readonly name: string = 'AthenaQueryResultPagerConcurrentAccessError';
+  readonly code = 'concurrent-access' as const;
+
+  constructor() {
+    super(CONCURRENT_ACCESS_MESSAGE);
+    Object.setPrototypeOf(this, AthenaQueryResultPagerConcurrentAccessError.prototype);
   }
 }

@@ -32,6 +32,7 @@
     "organization": false
   },
   "devDependencies": {
+    "@gammarers/projen-projects": "^0.5.8",
     "@stylistic/eslint-plugin": "^2",
     "@types/jest": "^30.0.0",
     "@types/node": "^20",
@@ -51,7 +52,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-athena": "^3.983.0",
-    "athena-query-result-parser": "^0.6.0"
+    "athena-query-result-parser": "^0.7.0"
   },
   "keywords": [
     "athena",

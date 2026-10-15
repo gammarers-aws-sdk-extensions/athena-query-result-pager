@@ -1,50 +1,19 @@
-import { typescript, javascript, github } from 'projen';
-const project = new typescript.TypeScriptProject({
-  authorName: 'yicr',
-  authorEmail: 'yicr@users.noreply.github.com',
-  defaultReleaseBranch: 'main',
+import { ProjenTypeScriptProject } from '@gammarers/projen-projects';
+const project = new ProjenTypeScriptProject({
   name: 'athena-query-result-pager',
-  projenrcTs: true,
-  typescriptVersion: '6.0.x',
-  packageManager: javascript.NodePackageManager.NPM,
-  repository: 'https://github.com/gammarers-aws-sdk-extensions/athena-query-result-pager.git',
+  repositoryUrl: 'https://github.com/gammarers-aws-sdk-extensions/athena-query-result-pager.git',
   description: 'Paginate AWS Athena GetQueryResults calls with AWS SDK v3. This library walks NextToken, parses tabular rows with athena-query-result-parser, and forwards MaxResults and QueryResultType from PagerOptions on every GetQueryResults request.',
   keywords: [
     'aws', 'aws-sdk', 'athena', 'query', 'result', 'pager',
   ],
   deps: [
     '@aws-sdk/client-athena@^3.983.0',
-    'athena-query-result-parser@^0.6.0',
+    'athena-query-result-parser@^0.7.0',
+  ],
+  devDeps: [
+    '@gammarers/projen-projects@^0.5.8',
   ],
   releaseToNpm: true,
   npmTrustedPublishing: true,
-  npmAccess: javascript.NpmAccess.PUBLIC,
-  minNodeVersion: '20.0.0',
-  workflowNodeVersion: '24.x',
-  depsUpgradeOptions: {
-    workflowOptions: {
-      labels: ['auto-approve', 'auto-merge'],
-      schedule: javascript.UpgradeDependenciesSchedule.WEEKLY,
-    },
-  },
-  githubOptions: {
-    projenCredentials: github.GithubCredentials.fromApp({
-      permissions: {
-        pullRequests: github.workflows.AppPermission.WRITE,
-        contents: github.workflows.AppPermission.WRITE,
-        workflows: github.workflows.AppPermission.WRITE,
-      },
-    }),
-  },
-  autoApproveOptions: {
-    allowedUsernames: [
-      'gammarers-projen-upgrade-bot[bot]',
-      'yicr',
-    ],
-  },
 });
-
-// package ignore .devcontainer directory
-project.addPackageIgnore('/.devcontainer');
-
 project.synth();
