@@ -5,6 +5,9 @@ const MAX_MAX_RESULTS = 1000;
 
 const EMPTY_QUERY_EXECUTION_ID_MESSAGE = 'queryExecutionId must be a non-empty string';
 
+const CONCURRENT_ACCESS_MESSAGE =
+  'concurrent fetch or iteration is not allowed on the same AthenaQueryExecutionPager';
+
 const describeInvalidMaxResults = (maxResults: number): string =>
   `options.maxResults must be an integer between ${MIN_MAX_RESULTS} and ${MAX_MAX_RESULTS}, got ${String(maxResults)}`;
 
@@ -31,7 +34,7 @@ export abstract class AthenaQueryResultPagerError extends Error {
 }
 
 /**
- * Thrown when `queryExecutionId` is empty or whitespace only.
+ * Thrown when `queryExecutionId` is empty or whitespace only (for example on `forExecution`).
  */
 export class AthenaQueryResultPagerEmptyQueryExecutionIdError extends AthenaQueryResultPagerError {
   readonly code = 'empty-query-execution-id' as const;
@@ -55,5 +58,17 @@ export class AthenaQueryResultPagerInvalidMaxResultsError extends AthenaQueryRes
   constructor(maxResults: number) {
     super(describeInvalidMaxResults(maxResults));
     this.maxResults = maxResults;
+  }
+}
+
+/**
+ * Thrown when a second fetch or iteration starts on the same execution handle
+ * while another operation is still in flight.
+ */
+export class AthenaQueryResultPagerConcurrentAccessError extends AthenaQueryResultPagerError {
+  readonly code = 'concurrent-access' as const;
+
+  constructor() {
+    super(CONCURRENT_ACCESS_MESSAGE);
   }
 }
