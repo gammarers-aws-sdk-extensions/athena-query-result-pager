@@ -5,7 +5,7 @@
 [![Node.js](https://img.shields.io/node/v/athena-query-result-pager?style=flat-square)](https://www.npmjs.com/package/athena-query-result-pager)
 [![build](https://img.shields.io/github/actions/workflow/status/gammarers-aws-sdk-extensions/athena-query-result-pager/build.yml?label=build&style=flat-square)](https://github.com/gammarers-aws-sdk-extensions/athena-query-result-pager/actions/workflows/build.yml)
 
-Paginate [AWS Athena](https://docs.aws.amazon.com/athena/latest/ug/v3-sdk.html) **`GetQueryResults`** calls with AWS SDK v3. This library walks **`NextToken`**, parses tabular rows with [athena-query-result-parser](https://www.npmjs.com/package/athena-query-result-parser) (0.6+), and forwards **`MaxResults`**, **`QueryResultType`**, and optional **`ParseResultSetOptions`** from **`PagerOptions`** on every page fetch.
+Paginate [AWS Athena](https://docs.aws.amazon.com/athena/latest/ug/v3-sdk.html) **`GetQueryResults`** calls with AWS SDK v3. This library walks **`NextToken`**, parses tabular rows with [athena-query-result-parser](https://www.npmjs.com/package/athena-query-result-parser) (0.7+), and forwards **`MaxResults`**, **`QueryResultType`**, and optional **`ParseResultSetOptions`** from **`PagerOptions`** on every page fetch.
 
 ## Features
 
@@ -45,7 +45,7 @@ yarn add athena-query-result-pager
 pnpm add athena-query-result-pager
 ```
 
-Runtime dependencies: `@aws-sdk/client-athena`, `athena-query-result-parser` **`^0.6.0`**. Your application typically already instantiates **`AthenaClient`** with credentials and Region.
+Runtime dependencies: `@aws-sdk/client-athena`, `athena-query-result-parser` **`^0.7.0`**. Your application typically already instantiates **`AthenaClient`** with credentials and Region.
 
 ## Usage
 
@@ -169,7 +169,7 @@ AWS SDK errors and parser errors from **`athena-query-result-parser`** are propa
 
 - Node.js **`>= 20.0.0`**
 - **`@aws-sdk/client-athena`** — provide **`AthenaClient`**; **`QueryResultType`** is also re-exported by this package
-- **`athena-query-result-parser`** **`^0.6.0`**
+- **`athena-query-result-parser`** **`^0.7.0`**
 
 ## License
 

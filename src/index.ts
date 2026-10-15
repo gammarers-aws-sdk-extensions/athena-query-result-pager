@@ -23,6 +23,7 @@ export {
   AthenaQueryResultParserInvalidMaxRowsError,
   AthenaQueryResultParserMaxRowsExceededError,
   AthenaQueryResultParserUnavailableResultError,
+  AthenaQueryResultParserUnparseableValueError,
   EXTRA_COLUMNS_KEY,
   headersFromMeta,
   isHeaderRow,
@@ -51,4 +52,5 @@ export type {
   RowParser,
   TypedParsedRow,
   UnavailableResultBehavior,
+  UnparseableValueBehavior,
 } from 'athena-query-result-parser';

@@ -8,7 +8,7 @@ const project = new ProjenTypeScriptProject({
   ],
   deps: [
     '@aws-sdk/client-athena@^3.983.0',
-    'athena-query-result-parser@^0.6.0',
+    'athena-query-result-parser@^0.7.0',
   ],
   devDeps: [
     '@gammarers/projen-projects@^0.5.8',
