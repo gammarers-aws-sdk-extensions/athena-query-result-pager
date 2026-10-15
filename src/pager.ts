@@ -171,12 +171,12 @@ export class AthenaQueryResultPager {
 export class AthenaQueryExecutionPager {
 
   /**
-   * Prefer {@link AthenaQueryResultPager.forExecution}. Validates `queryExecutionId` and builds a handle.
+   * Prefer {@link AthenaQueryResultPager.forExecution}. Builds an execution-scoped handle.
    *
    * @param client - SDK v3 `AthenaClient` used to call `GetQueryResults`.
    * @param options - Normalized `MaxResults` and `QueryResultType`.
    * @param parseResultSetOptions - Options forwarded to every parse call.
-   * @param queryExecutionId - Non-empty Athena query execution identifier.
+   * @param queryExecutionId - Athena query execution identifier (must be non-empty).
    * @returns A new execution-scoped pager.
    * @throws {AthenaQueryResultPagerEmptyQueryExecutionIdError} When `queryExecutionId` is empty or whitespace only.
    */
@@ -205,7 +205,8 @@ export class AthenaQueryExecutionPager {
    * @param client - SDK v3 `AthenaClient` used to call `GetQueryResults`.
    * @param options - Normalized `MaxResults` and `QueryResultType`.
    * @param parseResultSetOptions - Options forwarded to every parse call.
-   * @param queryExecutionId - Non-empty Athena query execution identifier.
+   * @param queryExecutionId - Athena query execution identifier (must be non-empty).
+   * @throws {AthenaQueryResultPagerEmptyQueryExecutionIdError} When `queryExecutionId` is empty or whitespace only.
    */
   private constructor(
     client: AthenaClient,
