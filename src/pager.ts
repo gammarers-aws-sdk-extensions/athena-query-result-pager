@@ -15,11 +15,12 @@ import {
 } from 'athena-query-result-parser';
 import { DEFAULT_MAX_RESULTS, MAX_MAX_RESULTS, MIN_MAX_RESULTS } from './core/consts';
 import {
+  AthenaQueryResultPagerAbortError,
   AthenaQueryResultPagerConcurrentAccessError,
   AthenaQueryResultPagerEmptyQueryExecutionIdError,
   AthenaQueryResultPagerInvalidMaxResultsError,
 } from './core/errors';
-import { hasNextPageToken, isBlankQueryExecutionId } from './core/pager-predicates';
+import { hasNextPageToken, isAbortRequested, isBlankQueryExecutionId } from './core/pager-predicates';
 
 /** Default `QueryResultType` forwarded to Athena `GetQueryResults`. */
 const DEFAULT_QUERY_RESULT_TYPE = QueryResultType.DATA_ROWS;
@@ -74,7 +75,73 @@ export interface PagerOptions {
   parseResultSetOptions?: ParseResultSetOptions;
 }
 
+/**
+ * Cancellation shared by fetch and iterate calls.
+ */
+export interface PagerAbortOptions {
+  /**
+   * Cancels the in-flight `GetQueryResults` request and stops further paging.
+   * Aborted calls throw {@link AthenaQueryResultPagerAbortError}.
+   */
+  readonly abortSignal?: AbortSignal;
+}
+
+/**
+ * Options for a single page fetch.
+ *
+ * Pass this object when a call needs {@link PagerAbortOptions.abortSignal}.
+ * A positional continuation-token string is still accepted.
+ */
+export interface FetchPageOptions extends PagerAbortOptions {
+  /**
+   * Continuation token from the previous page. Omit on the first page.
+   */
+  readonly nextToken?: string;
+}
+
 type NormalizedPagerOptions = Required<Pick<PagerOptions, 'maxResults' | 'queryResultType'>>;
+
+const resolveFetchPageArguments = (
+  nextTokenOrOptions?: string | FetchPageOptions,
+): FetchPageOptions => {
+  if (typeof nextTokenOrOptions === 'string') {
+    return { nextToken: nextTokenOrOptions };
+  }
+
+  return nextTokenOrOptions ?? {};
+};
+
+const isRowParser = <T>(
+  value: RowParser<T> | PagerAbortOptions | undefined,
+): value is RowParser<T> => typeof value === 'function';
+
+const resolveIterateRowsArguments = <T>(
+  rowParserOrOptions?: RowParser<T> | PagerAbortOptions,
+  options?: PagerAbortOptions,
+): { readonly rowParser?: RowParser<T>; readonly abortSignal?: AbortSignal } => {
+  if (!isRowParser(rowParserOrOptions)) {
+    return { abortSignal: rowParserOrOptions?.abortSignal };
+  }
+
+  return {
+    rowParser: rowParserOrOptions,
+    abortSignal: options?.abortSignal,
+  };
+};
+
+/**
+ * Stops paging when the caller has already aborted.
+ *
+ * @param signal - Abort signal from the caller, if any.
+ * @throws {AthenaQueryResultPagerAbortError} When `signal` is already aborted.
+ */
+const ensureNotAborted = (signal: AbortSignal | undefined): void => {
+  if (!isAbortRequested(signal)) {
+    return;
+  }
+
+  throw new AthenaQueryResultPagerAbortError();
+};
 
 /**
  * Factory for execution-scoped Athena result pagers.
@@ -165,6 +232,9 @@ export class AthenaQueryResultPager {
  * (`fetchPage` / `fetchPageWith`, `iteratePages` / `iteratePagesWith`) and at the row level
  * (`iterateRows` with or without `rowParser`). Use {@link AthenaQueryExecutionPager.fetchPageDetailed} when
  * per-page {@link ParseResultSetDiagnostics} is needed.
+ *
+ * Pass {@link PagerAbortOptions.abortSignal} to cancel the in-flight `GetQueryResults` call and to stop
+ * before the next page or row. Cancelled calls throw {@link AthenaQueryResultPagerAbortError}.
  *
  * Create via {@link AthenaQueryResultPager.forExecution}.
  */
@@ -263,33 +333,67 @@ export class AthenaQueryExecutionPager {
   /**
    * Invokes `GetQueryResults` for the bound execution (caller must already hold exclusive access).
    *
+   * Forwards `abortSignal` so an in-flight HTTP call stops without waiting out the client timeout.
+   * A response that arrives after abort is not treated as a successful page.
+   *
    * @param nextToken - Continuation token from a prior page, if any.
+   * @param abortSignal - Cancels this request when aborted.
    * @returns Raw AWS response for the requested page.
+   * @throws {AthenaQueryResultPagerAbortError} When `abortSignal` is already aborted or aborts during `send`.
    */
   private readonly sendGetQueryResults = async (
     nextToken?: string,
+    abortSignal?: AbortSignal,
   ): Promise<GetQueryResultsCommandOutput> => {
+    ensureNotAborted(abortSignal);
+
     const input: GetQueryResultsCommandInput = {
       QueryExecutionId: this.queryExecutionId,
       NextToken: nextToken,
       MaxResults: this.options.maxResults,
       QueryResultType: this.options.queryResultType,
     };
+    const command = new GetQueryResultsCommand(input);
+    const sendCommand = (): Promise<GetQueryResultsCommandOutput> => {
+      if (abortSignal === undefined) {
+        return this.client.send(command);
+      }
 
-    return this.client.send(new GetQueryResultsCommand(input));
+      // Forward the signal so the SDK aborts the HTTP call instead of waiting out the client timeout.
+      return this.client.send(command, { abortSignal });
+    };
+
+    let response: GetQueryResultsCommandOutput;
+    try {
+      response = await sendCommand();
+    } catch (error) {
+      if (!isAbortRequested(abortSignal)) {
+        throw error;
+      }
+
+      throw new AthenaQueryResultPagerAbortError(error);
+    }
+
+    ensureNotAborted(abortSignal);
+    return response;
   };
 
   /**
    * Fetches one {@link ParsedRow} page without taking exclusive access (caller must already hold it).
    *
    * @param nextToken - Continuation token from a prior page, if any.
+   * @param abortSignal - Cancels this request when aborted.
    * @returns Parsed rows plus pagination metadata from this response only.
+   * @throws {AthenaQueryResultPagerAbortError} When `abortSignal` aborts before the page is returned.
    */
   private readonly fetchPageUnlocked = async (
     nextToken?: string,
+    abortSignal?: AbortSignal,
   ): Promise<PageResult<ParsedRow>> => {
-    const response = await this.sendGetQueryResults(nextToken);
+    const response = await this.sendGetQueryResults(nextToken, abortSignal);
     const rows = this.parser.parseResultSet(response.ResultSet, this.parseResultSetOptions);
+
+    ensureNotAborted(abortSignal);
 
     return {
       rows,
@@ -302,13 +406,18 @@ export class AthenaQueryExecutionPager {
    * Fetches one detailed page without taking exclusive access (caller must already hold it).
    *
    * @param nextToken - Continuation token from a prior page, if any.
+   * @param abortSignal - Cancels this request when aborted.
    * @returns Parsed rows, pagination metadata, and parser diagnostics for this response only.
+   * @throws {AthenaQueryResultPagerAbortError} When `abortSignal` aborts before the page is returned.
    */
   private readonly fetchPageDetailedUnlocked = async (
     nextToken?: string,
+    abortSignal?: AbortSignal,
   ): Promise<PageDetailedResult> => {
-    const response = await this.sendGetQueryResults(nextToken);
+    const response = await this.sendGetQueryResults(nextToken, abortSignal);
     const parsed = this.parser.parseResultSetDetailed(response.ResultSet, this.parseResultSetOptions);
+
+    ensureNotAborted(abortSignal);
 
     return {
       rows: parsed.rows,
@@ -324,18 +433,23 @@ export class AthenaQueryExecutionPager {
    * @typeParam T - Output type produced by `rowParser`.
    * @param rowParser - Converts each dictionary row into `T`.
    * @param nextToken - Continuation token from a prior page, if any.
+   * @param abortSignal - Cancels this request when aborted.
    * @returns Transformed rows plus pagination metadata from this response only.
+   * @throws {AthenaQueryResultPagerAbortError} When `abortSignal` aborts before the page is returned.
    */
   private readonly fetchPageWithUnlocked = async <T>(
     rowParser: RowParser<T>,
     nextToken?: string,
+    abortSignal?: AbortSignal,
   ): Promise<PageResult<T>> => {
-    const response = await this.sendGetQueryResults(nextToken);
+    const response = await this.sendGetQueryResults(nextToken, abortSignal);
     const rows = this.parser.parseResultSetWith(
       response.ResultSet,
       rowParser,
       this.parseResultSetOptions,
     );
+
+    ensureNotAborted(abortSignal);
 
     return {
       rows,
@@ -348,58 +462,86 @@ export class AthenaQueryExecutionPager {
    * Retrieves a single results page as dictionary-shaped {@link ParsedRow} values.
    *
    * Uses {@link AthenaQueryResultParser.parseResultSet} on the AWS response.
+   * Pass a continuation-token string, or {@link FetchPageOptions} when the call also needs
+   * {@link FetchPageOptions.abortSignal}. `fetchPage(page.nextToken)` still works.
    *
-   * @param nextToken - Pass `undefined` first; subsequent calls use {@link PageResult.nextToken}.
+   * @param nextTokenOrOptions - Continuation token, or fetch options (`nextToken`, `abortSignal`).
    * @returns Parsed rows plus pagination metadata from this response only.
    * @throws {AthenaQueryResultPagerConcurrentAccessError} When another operation is already in flight.
+   * @throws {AthenaQueryResultPagerAbortError} When `abortSignal` is already aborted or aborts during the request.
    */
-  readonly fetchPage = async (nextToken?: string): Promise<PageResult<ParsedRow>> =>
-    this.runExclusive(() => this.fetchPageUnlocked(nextToken));
+  readonly fetchPage = async (
+    nextTokenOrOptions?: string | FetchPageOptions,
+  ): Promise<PageResult<ParsedRow>> => {
+    const { nextToken, abortSignal } = resolveFetchPageArguments(nextTokenOrOptions);
+
+    return this.runExclusive(() => this.fetchPageUnlocked(nextToken, abortSignal));
+  };
 
   /**
    * Retrieves one page as {@link ParsedRow} values plus {@link ParseResultSetDiagnostics}.
    *
    * Uses {@link AthenaQueryResultParser.parseResultSetDetailed} on the AWS response.
+   * Pass a continuation-token string, or {@link FetchPageOptions} when the call also needs
+   * {@link FetchPageOptions.abortSignal}. `fetchPageDetailed(page.nextToken)` still works.
    *
-   * @param nextToken - Pass `undefined` first; subsequent calls use {@link PageDetailedResult.nextToken}.
+   * @param nextTokenOrOptions - Continuation token, or fetch options (`nextToken`, `abortSignal`).
    * @returns Parsed rows, pagination metadata, and parser diagnostics for this response only.
    * @throws {AthenaQueryResultPagerConcurrentAccessError} When another operation is already in flight.
+   * @throws {AthenaQueryResultPagerAbortError} When `abortSignal` is already aborted or aborts during the request.
    */
-  readonly fetchPageDetailed = async (nextToken?: string): Promise<PageDetailedResult> =>
-    this.runExclusive(() => this.fetchPageDetailedUnlocked(nextToken));
+  readonly fetchPageDetailed = async (
+    nextTokenOrOptions?: string | FetchPageOptions,
+  ): Promise<PageDetailedResult> => {
+    const { nextToken, abortSignal } = resolveFetchPageArguments(nextTokenOrOptions);
+
+    return this.runExclusive(() => this.fetchPageDetailedUnlocked(nextToken, abortSignal));
+  };
 
   /**
    * Retrieves one page and maps each {@link ParsedRow} through `rowParser`.
    *
    * Uses {@link AthenaQueryResultParser.parseResultSetWith} on the AWS response.
+   * The second argument is a continuation-token string, or {@link FetchPageOptions} when the call
+   * also needs {@link FetchPageOptions.abortSignal}. `fetchPageWith(rowParser, page.nextToken)` still works.
    *
    * @typeParam T - Output type produced by `rowParser`.
    * @param rowParser - Converts each dictionary row into `T`.
-   * @param nextToken - Pass `undefined` first; subsequent calls use {@link PageResult.nextToken}.
+   * @param nextTokenOrOptions - Continuation token, or fetch options (`nextToken`, `abortSignal`).
    * @returns Transformed rows plus pagination metadata from this response only.
    * @throws {AthenaQueryResultPagerConcurrentAccessError} When another operation is already in flight.
+   * @throws {AthenaQueryResultPagerAbortError} When `abortSignal` is already aborted or aborts during the request.
    */
   readonly fetchPageWith = async <T>(
     rowParser: RowParser<T>,
-    nextToken?: string,
-  ): Promise<PageResult<T>> =>
-    this.runExclusive(() => this.fetchPageWithUnlocked(rowParser, nextToken));
+    nextTokenOrOptions?: string | FetchPageOptions,
+  ): Promise<PageResult<T>> => {
+    const { nextToken, abortSignal } = resolveFetchPageArguments(nextTokenOrOptions);
+
+    return this.runExclusive(() => this.fetchPageWithUnlocked(rowParser, nextToken, abortSignal));
+  };
 
   /**
    * Lazily walks all pages for this execution, yielding one {@link PageResult} of {@link ParsedRow} per step.
    *
    * Holds exclusive access for the entire iteration (from first `next()` until completion or early return).
+   * Checks {@link PagerAbortOptions.abortSignal} before each page so a cancel does not start another request.
    *
+   * @param options - Optional abort signal for the whole walk.
    * @yields One page at a time until AWS returns no `NextToken`.
    * @throws {AthenaQueryResultPagerConcurrentAccessError} When another operation is already in flight.
+   * @throws {AthenaQueryResultPagerAbortError} When `abortSignal` is already aborted or aborts during a request.
    */
-  async *iteratePages(): AsyncGenerator<PageResult<ParsedRow>> {
+  async *iteratePages(options?: PagerAbortOptions): AsyncGenerator<PageResult<ParsedRow>> {
+    const abortSignal = options?.abortSignal;
+
     this.enter();
     try {
       let nextToken: string | undefined;
 
       do {
-        const page = await this.fetchPageUnlocked(nextToken);
+        ensureNotAborted(abortSignal);
+        const page = await this.fetchPageUnlocked(nextToken, abortSignal);
         yield page;
         nextToken = page.nextToken;
       } while (hasNextPageToken(nextToken));
@@ -412,17 +554,23 @@ export class AthenaQueryExecutionPager {
    * Lazily walks all pages for this execution, yielding one {@link PageDetailedResult} per step.
    *
    * Holds exclusive access for the entire iteration (from first `next()` until completion or early return).
+   * Checks {@link PagerAbortOptions.abortSignal} before each page so a cancel does not start another request.
    *
+   * @param options - Optional abort signal for the whole walk.
    * @yields One page at a time (with diagnostics) until AWS returns no `NextToken`.
    * @throws {AthenaQueryResultPagerConcurrentAccessError} When another operation is already in flight.
+   * @throws {AthenaQueryResultPagerAbortError} When `abortSignal` is already aborted or aborts during a request.
    */
-  async *iteratePagesDetailed(): AsyncGenerator<PageDetailedResult> {
+  async *iteratePagesDetailed(options?: PagerAbortOptions): AsyncGenerator<PageDetailedResult> {
+    const abortSignal = options?.abortSignal;
+
     this.enter();
     try {
       let nextToken: string | undefined;
 
       do {
-        const page = await this.fetchPageDetailedUnlocked(nextToken);
+        ensureNotAborted(abortSignal);
+        const page = await this.fetchPageDetailedUnlocked(nextToken, abortSignal);
         yield page;
         nextToken = page.nextToken;
       } while (hasNextPageToken(nextToken));
@@ -435,21 +583,28 @@ export class AthenaQueryExecutionPager {
    * Same as {@link AthenaQueryExecutionPager.iteratePages} but maps each row through `rowParser` on every page.
    *
    * Holds exclusive access for the entire iteration (from first `next()` until completion or early return).
+   * Checks {@link PagerAbortOptions.abortSignal} before each page so a cancel does not start another request.
    *
    * @typeParam T - Output type emitted in {@link PageResult.rows}.
    * @param rowParser - Converts each parsed row into `T`.
+   * @param options - Optional abort signal for the whole walk.
    * @yields Successive {@link PageResult} values whose `rows` are typed as `T`.
    * @throws {AthenaQueryResultPagerConcurrentAccessError} When another operation is already in flight.
+   * @throws {AthenaQueryResultPagerAbortError} When `abortSignal` is already aborted or aborts during a request.
    */
   async *iteratePagesWith<T>(
     rowParser: RowParser<T>,
+    options?: PagerAbortOptions,
   ): AsyncGenerator<PageResult<T>> {
+    const abortSignal = options?.abortSignal;
+
     this.enter();
     try {
       let nextToken: string | undefined;
 
       do {
-        const page = await this.fetchPageWithUnlocked(rowParser, nextToken);
+        ensureNotAborted(abortSignal);
+        const page = await this.fetchPageWithUnlocked(rowParser, nextToken, abortSignal);
         yield page;
         nextToken = page.nextToken;
       } while (hasNextPageToken(nextToken));
@@ -459,44 +614,56 @@ export class AthenaQueryExecutionPager {
   }
 
   /**
-   * Flattens {@link AthenaQueryExecutionPager.iteratePages} into individual {@link ParsedRow} values (one row per `next()`).
+   * Flattens pages into individual {@link ParsedRow} values (one row per `next()`).
    *
    * Only one page of rows is held in memory at a time.
+   * Pass {@link PagerAbortOptions} to cancel before the next page or the next row.
    *
+   * @param options - Optional abort signal for the whole walk.
    * @yields Each dictionary-shaped row in execution order.
+   * @throws {AthenaQueryResultPagerAbortError} When `abortSignal` is already aborted or aborts during a request.
    */
-  iterateRows(): AsyncGenerator<ParsedRow>;
+  iterateRows(options?: PagerAbortOptions): AsyncGenerator<ParsedRow>;
 
   /**
-   * Flattens {@link AthenaQueryExecutionPager.iteratePagesWith} into individual `T` values (one row per `next()`).
+   * Flattens pages into individual `T` values (one row per `next()`).
    *
    * Only one page of rows is held in memory at a time.
+   * Checks {@link PagerAbortOptions.abortSignal} before each row so a cancel stops mid-page.
    *
    * @typeParam T - Output type produced by `rowParser`.
    * @param rowParser - Converts each parsed row into `T`.
+   * @param options - Optional abort signal for the whole walk.
    * @yields Each transformed row in execution order.
+   * @throws {AthenaQueryResultPagerAbortError} When `abortSignal` is already aborted or aborts during a request.
    */
-  iterateRows<T>(rowParser: RowParser<T>): AsyncGenerator<T>;
+  iterateRows<T>(rowParser: RowParser<T>, options?: PagerAbortOptions): AsyncGenerator<T>;
 
   /**
    * Shared implementation for {@link AthenaQueryExecutionPager.iterateRows} overloads.
    *
    * Holds exclusive access for the entire iteration. Delegates to unlocked page fetches so the
    * lock is not nested under {@link AthenaQueryExecutionPager.fetchPage}.
+   * Stops before the next row when the caller aborts, including rows already parsed on the current page.
    */
   async *iterateRows<T>(
-    rowParser?: RowParser<T>,
+    rowParserOrOptions?: RowParser<T> | PagerAbortOptions,
+    options?: PagerAbortOptions,
   ): AsyncGenerator<ParsedRow | T> {
+    const { rowParser, abortSignal } = resolveIterateRowsArguments(rowParserOrOptions, options);
+
     this.enter();
     try {
       let nextToken: string | undefined;
 
       do {
+        ensureNotAborted(abortSignal);
         const page = rowParser
-          ? await this.fetchPageWithUnlocked(rowParser, nextToken)
-          : await this.fetchPageUnlocked(nextToken);
+          ? await this.fetchPageWithUnlocked(rowParser, nextToken, abortSignal)
+          : await this.fetchPageUnlocked(nextToken, abortSignal);
 
         for (const row of page.rows) {
+          ensureNotAborted(abortSignal);
           yield row;
         }
         nextToken = page.nextToken;

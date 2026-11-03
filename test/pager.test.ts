@@ -3,6 +3,7 @@ import type { GetQueryResultsCommandOutput } from '@aws-sdk/client-athena';
 import {
   AthenaQueryExecutionPager,
   AthenaQueryResultPager,
+  AthenaQueryResultPagerAbortError,
   AthenaQueryResultPagerConcurrentAccessError,
   AthenaQueryResultPagerEmptyQueryExecutionIdError,
   AthenaQueryResultPagerError,
@@ -695,6 +696,223 @@ describe('AthenaQueryResultPager', () => {
     it('should return false when nextToken is undefined', () => {
       expect(AthenaQueryResultPager.hasNextPage({ rows: [], rowCount: 0 })).toBe(false);
       expect(AthenaQueryResultPager.hasNextPage({ rows: [], nextToken: undefined, rowCount: 0 })).toBe(false);
+    });
+  });
+
+  describe('abort', () => {
+    const rowParser = (row: ParsedRow): ParsedRow => row;
+
+    it.each([
+      [
+        'fetchPage',
+        (execution: AthenaQueryExecutionPager, signal: AbortSignal) =>
+          execution.fetchPage({ abortSignal: signal }),
+      ],
+      [
+        'fetchPageDetailed',
+        (execution: AthenaQueryExecutionPager, signal: AbortSignal) =>
+          execution.fetchPageDetailed({ abortSignal: signal }),
+      ],
+      [
+        'fetchPageWith',
+        (execution: AthenaQueryExecutionPager, signal: AbortSignal) =>
+          execution.fetchPageWith(rowParser, { abortSignal: signal }),
+      ],
+    ])('should not call GetQueryResults from %s when the signal is already aborted', async (_name, call) => {
+      const controller = new AbortController();
+      controller.abort();
+      const send = jest.fn();
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+
+      await expect(call(execution, controller.signal)).rejects.toBeInstanceOf(AthenaQueryResultPagerAbortError);
+      await expect(call(execution, controller.signal)).rejects.toMatchObject({
+        code: 'aborted',
+        cause: undefined,
+      });
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        'fetchPage',
+        (execution: AthenaQueryExecutionPager, signal: AbortSignal) =>
+          execution.fetchPage({ abortSignal: signal }),
+      ],
+      [
+        'fetchPageDetailed',
+        (execution: AthenaQueryExecutionPager, signal: AbortSignal) =>
+          execution.fetchPageDetailed({ abortSignal: signal }),
+      ],
+      [
+        'fetchPageWith',
+        (execution: AthenaQueryExecutionPager, signal: AbortSignal) =>
+          execution.fetchPageWith(rowParser, { abortSignal: signal }),
+      ],
+    ])('should forward abortSignal from %s to GetQueryResults', async (_name, call) => {
+      const controller = new AbortController();
+      const send = createMockSend([{ rows: [{ id: '1' }], nextToken: undefined }]);
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+
+      await call(execution, controller.signal);
+
+      expect(send.mock.calls[0][1]).toEqual({ abortSignal: controller.signal });
+    });
+
+    it('should accept nextToken inside FetchPageOptions without sending an abort option', async () => {
+      const send = createMockSend([
+        { rows: [{ id: '1' }], nextToken: 'token-2' },
+        { rows: [{ id: '2' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+
+      await execution.fetchPage();
+      await execution.fetchPage({ nextToken: 'token-2' });
+
+      expect(send.mock.calls[1]).toHaveLength(1);
+      expect(send.mock.calls[1][0].input.NextToken).toBe('token-2');
+    });
+
+    it('should wrap an in-flight GetQueryResults abort and release the handle', async () => {
+      const controller = new AbortController();
+      const sdkError = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+      let markSendReached!: () => void;
+      const sendReached = new Promise<void>((resolve) => {
+        markSendReached = resolve;
+      });
+      const send = jest.fn().mockImplementation((
+        _command: GetQueryResultsCommand,
+        options?: { abortSignal?: AbortSignal },
+      ) => new Promise((_resolve, reject) => {
+        markSendReached();
+        const abort = () => {
+          reject(sdkError);
+        };
+        if (options?.abortSignal?.aborted) {
+          abort();
+          return;
+        }
+        options?.abortSignal?.addEventListener('abort', abort, { once: true });
+      }));
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+      const pending = execution.fetchPage({ abortSignal: controller.signal });
+      const settled = pending.then(() => {
+        throw new Error('expected abort');
+      }, (error: unknown) => error);
+
+      await sendReached;
+      controller.abort();
+
+      const error = await settled;
+      expect(error).toBeInstanceOf(AthenaQueryResultPagerAbortError);
+      expect(error).toMatchObject({ code: 'aborted', cause: sdkError });
+
+      send.mockResolvedValueOnce({
+        ResultSet: createMockResultSet([]),
+        NextToken: undefined,
+      });
+      await expect(execution.fetchPage()).resolves.toMatchObject({ rowCount: 0 });
+    });
+
+    it('should propagate non-abort send failures', async () => {
+      const controller = new AbortController();
+      const send = jest.fn().mockRejectedValue(Object.assign(new Error('throttled'), { name: 'ThrottlingException' }));
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+
+      await expect(execution.fetchPage({ abortSignal: controller.signal })).rejects.toThrow('throttled');
+      await expect(execution.fetchPage({ abortSignal: controller.signal })).rejects.not.toBeInstanceOf(
+        AthenaQueryResultPagerAbortError,
+      );
+    });
+
+    it.each([
+      [
+        'iteratePages',
+        (execution: AthenaQueryExecutionPager, signal: AbortSignal) =>
+          execution.iteratePages({ abortSignal: signal }),
+      ],
+      [
+        'iteratePagesDetailed',
+        (execution: AthenaQueryExecutionPager, signal: AbortSignal) =>
+          execution.iteratePagesDetailed({ abortSignal: signal }),
+      ],
+      [
+        'iteratePagesWith',
+        (execution: AthenaQueryExecutionPager, signal: AbortSignal) =>
+          execution.iteratePagesWith(rowParser, { abortSignal: signal }),
+      ],
+    ])('should stop %s before the next page when aborted', async (_name, iterate) => {
+      const controller = new AbortController();
+      const send = createMockSend([
+        { rows: [{ id: '1' }], nextToken: 't2' },
+        { rows: [{ id: '2' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+      const pages: Array<{ rowCount: number }> = [];
+
+      await expect((async () => {
+        for await (const page of iterate(execution, controller.signal)) {
+          pages.push({ rowCount: page.rowCount });
+          controller.abort();
+        }
+      })()).rejects.toBeInstanceOf(AthenaQueryResultPagerAbortError);
+
+      expect(pages).toEqual([{ rowCount: 1 }]);
+      expect(send).toHaveBeenCalledTimes(1);
+
+      await expect(execution.fetchPage()).resolves.toEqual(expect.objectContaining({
+        rows: expect.any(Array),
+      }));
+      expect(send).toHaveBeenCalledTimes(2);
+    });
+
+    it('should stop iterateRows before the next row when aborted', async () => {
+      const controller = new AbortController();
+      const send = createMockSend([
+        { rows: [{ id: '1' }, { id: '2' }], nextToken: 't2' },
+        { rows: [{ id: '3' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+      const rows: ParsedRow[] = [];
+
+      await expect((async () => {
+        for await (const row of execution.iterateRows({ abortSignal: controller.signal })) {
+          rows.push(row);
+          controller.abort();
+        }
+      })()).rejects.toBeInstanceOf(AthenaQueryResultPagerAbortError);
+
+      expect(rows).toEqual([{ id: '1' }]);
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('should stop iterateRows with a row parser before the next row when aborted', async () => {
+      const controller = new AbortController();
+      const send = createMockSend([
+        { rows: [{ id: '1' }, { id: '2' }], nextToken: 't2' },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+      const rows: string[] = [];
+
+      await expect((async () => {
+        for await (const row of execution.iterateRows(
+          (parsed: ParsedRow) => String(parsed.id ?? ''),
+          { abortSignal: controller.signal },
+        )) {
+          rows.push(row);
+          controller.abort();
+        }
+      })()).rejects.toBeInstanceOf(AthenaQueryResultPagerAbortError);
+
+      expect(rows).toEqual(['1']);
+      expect(send).toHaveBeenCalledTimes(1);
     });
   });
 });

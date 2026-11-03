@@ -1,4 +1,4 @@
-import { hasNextPageToken, isBlankQueryExecutionId } from '../src/core/pager-predicates';
+import { hasNextPageToken, isAbortRequested, isBlankQueryExecutionId } from '../src/core/pager-predicates';
 
 describe('hasNextPageToken', () => {
   it.each([
@@ -7,6 +7,20 @@ describe('hasNextPageToken', () => {
     ['', true],
   ] as const)('hasNextPageToken(%p) → %p', (nextToken, expected) => {
     expect(hasNextPageToken(nextToken)).toBe(expected);
+  });
+});
+
+describe('isAbortRequested', () => {
+  const notAborted = new AbortController().signal;
+  const abortedController = new AbortController();
+  abortedController.abort();
+
+  it.each([
+    [undefined, false],
+    [notAborted, false],
+    [abortedController.signal, true],
+  ] as const)('isAbortRequested(%p) → %p', (signal, expected) => {
+    expect(isAbortRequested(signal)).toBe(expected);
   });
 });
 

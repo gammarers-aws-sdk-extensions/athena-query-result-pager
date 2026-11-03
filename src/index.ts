@@ -1,12 +1,15 @@
 export {
   AthenaQueryExecutionPager,
   AthenaQueryResultPager,
+  type FetchPageOptions,
   type PageDetailedResult,
   type PageResult,
+  type PagerAbortOptions,
   type PagerOptions,
 } from './pager';
 
 export {
+  AthenaQueryResultPagerAbortError,
   AthenaQueryResultPagerConcurrentAccessError,
   AthenaQueryResultPagerEmptyQueryExecutionIdError,
   AthenaQueryResultPagerError,

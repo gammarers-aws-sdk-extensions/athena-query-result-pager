@@ -11,6 +11,17 @@ export const hasNextPageToken = (nextToken: string | undefined): nextToken is st
   nextToken !== undefined;
 
 /**
+ * Reports whether the caller has cancelled paging.
+ *
+ * A missing signal means the caller did not ask to cancel, so paging continues.
+ *
+ * @param signal - Abort signal from the caller, if any.
+ * @returns `true` when the signal exists and is already aborted.
+ */
+export const isAbortRequested = (signal: AbortSignal | undefined): boolean =>
+  signal?.aborted === true;
+
+/**
  * Reports whether `queryExecutionId` is empty or whitespace only.
  *
  * @param queryExecutionId - Athena query execution identifier candidate.
