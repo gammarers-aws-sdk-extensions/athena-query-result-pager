@@ -190,7 +190,7 @@ AWS SDK errors and parser errors from **`athena-query-result-parser`** propagate
 | `queryResultType` | `QueryResultType` | `QueryResultType.DATA_ROWS` | Forwarded on every `GetQueryResults` call. Import from this package (re-exported from `@aws-sdk/client-athena`). |
 | `parseResultSetOptions` | `ParseResultSetOptions` | parser defaults | Forwarded to every parse on execution handles (`skipHeaderRow`, `columnCountMismatchBehavior`, `maxRows`, …). |
 
-**`forExecution(queryExecutionId)`** throws **`AthenaQueryResultPagerEmptyQueryExecutionIdError`** when the id is empty or whitespace-only.
+**`forExecution(queryExecutionId)`** removes leading and trailing whitespace before the id is sent. It throws **`AthenaQueryResultPagerEmptyQueryExecutionIdError`** when the id is empty or whitespace-only.
 
 ### Per-call options
 

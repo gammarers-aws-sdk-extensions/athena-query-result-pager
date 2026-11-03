@@ -59,6 +59,7 @@ export class AthenaQueryResultPagerAbortError extends AthenaQueryResultPagerErro
 /**
  * Thrown when `queryExecutionId` is empty or whitespace only
  * (for example on {@link AthenaQueryResultPager.forExecution}).
+ * A non-blank id is stored with leading and trailing whitespace removed.
  */
 export class AthenaQueryResultPagerEmptyQueryExecutionIdError extends AthenaQueryResultPagerError {
   override readonly name: string = 'AthenaQueryResultPagerEmptyQueryExecutionIdError';

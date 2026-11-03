@@ -1,4 +1,9 @@
-import { hasNextPageToken, isAbortRequested, isBlankQueryExecutionId } from '../src/core/pager-predicates';
+import {
+  hasNextPageToken,
+  isAbortRequested,
+  isBlankQueryExecutionId,
+  normalizeQueryExecutionId,
+} from '../src/core/pager-predicates';
 
 describe('hasNextPageToken', () => {
   it.each([
@@ -21,6 +26,19 @@ describe('isAbortRequested', () => {
     [abortedController.signal, true],
   ] as const)('isAbortRequested(%p) → %p', (signal, expected) => {
     expect(isAbortRequested(signal)).toBe(expected);
+  });
+});
+
+describe('normalizeQueryExecutionId', () => {
+  it.each([
+    ['exec-1', 'exec-1'],
+    [' exec-1 ', 'exec-1'],
+    ['\texec-1\n', 'exec-1'],
+    ['exec 1', 'exec 1'],
+    ['', ''],
+    ['   ', ''],
+  ] as const)('normalizeQueryExecutionId(%p) → %p', (queryExecutionId, expected) => {
+    expect(normalizeQueryExecutionId(queryExecutionId)).toBe(expected);
   });
 });
 

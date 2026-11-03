@@ -20,7 +20,7 @@ import {
   AthenaQueryResultPagerEmptyQueryExecutionIdError,
   AthenaQueryResultPagerInvalidMaxResultsError,
 } from './core/errors';
-import { hasNextPageToken, isAbortRequested, isBlankQueryExecutionId } from './core/pager-predicates';
+import { hasNextPageToken, isAbortRequested, isBlankQueryExecutionId, normalizeQueryExecutionId } from './core/pager-predicates';
 
 /** Default `QueryResultType` forwarded to Athena `GetQueryResults`. */
 const DEFAULT_QUERY_RESULT_TYPE = QueryResultType.DATA_ROWS;
@@ -204,8 +204,8 @@ export class AthenaQueryResultPager {
    * Separate handles may run concurrently. Concurrent fetch or iteration on the **same** handle
    * throws {@link AthenaQueryResultPagerConcurrentAccessError}.
    *
-   * @param queryExecutionId - Athena query execution identifier.
-   * @returns A handle bound to `queryExecutionId`.
+   * @param queryExecutionId - Athena query execution identifier. Leading and trailing whitespace is removed before the id is sent.
+   * @returns A handle bound to the trimmed `queryExecutionId`.
    * @throws {AthenaQueryResultPagerEmptyQueryExecutionIdError} When `queryExecutionId` is empty or whitespace only.
    */
   readonly forExecution = (queryExecutionId: string): AthenaQueryExecutionPager => {
@@ -246,7 +246,7 @@ export class AthenaQueryExecutionPager {
    * @param client - SDK v3 `AthenaClient` used to call `GetQueryResults`.
    * @param options - Normalized `MaxResults` and `QueryResultType`.
    * @param parseResultSetOptions - Options forwarded to every parse call.
-   * @param queryExecutionId - Athena query execution identifier (must be non-empty).
+   * @param queryExecutionId - Athena query execution identifier. Leading and trailing whitespace is removed before the id is stored.
    * @returns A new execution-scoped pager.
    * @throws {AthenaQueryResultPagerEmptyQueryExecutionIdError} When `queryExecutionId` is empty or whitespace only.
    */
@@ -264,7 +264,7 @@ export class AthenaQueryExecutionPager {
   private readonly options: NormalizedPagerOptions;
   /** Parser options applied on every page parse (undefined uses parser defaults). */
   private readonly parseResultSetOptions?: ParseResultSetOptions;
-  /** Bound Athena query execution identifier. */
+  /** Bound Athena query execution identifier, with surrounding whitespace removed. */
   private readonly queryExecutionId: string;
   /** Stateful parser reused across pages of this execution only. */
   private readonly parser: AthenaQueryResultParser;
@@ -275,7 +275,7 @@ export class AthenaQueryExecutionPager {
    * @param client - SDK v3 `AthenaClient` used to call `GetQueryResults`.
    * @param options - Normalized `MaxResults` and `QueryResultType`.
    * @param parseResultSetOptions - Options forwarded to every parse call.
-   * @param queryExecutionId - Athena query execution identifier (must be non-empty).
+   * @param queryExecutionId - Athena query execution identifier. Leading and trailing whitespace is removed before the id is stored.
    * @throws {AthenaQueryResultPagerEmptyQueryExecutionIdError} When `queryExecutionId` is empty or whitespace only.
    */
   private constructor(
@@ -291,7 +291,8 @@ export class AthenaQueryExecutionPager {
     this.client = client;
     this.options = options;
     this.parseResultSetOptions = parseResultSetOptions;
-    this.queryExecutionId = queryExecutionId;
+    // Athena receives the trimmed id, so a copied value with surrounding spaces still matches the execution.
+    this.queryExecutionId = normalizeQueryExecutionId(queryExecutionId);
     // Default reusePolicy is 'paginate': retain headers / header-row-dropped across pages of one query.
     this.parser = AthenaQueryResultParser.create();
   }

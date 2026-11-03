@@ -22,10 +22,21 @@ export const isAbortRequested = (signal: AbortSignal | undefined): boolean =>
   signal?.aborted === true;
 
 /**
+ * Removes leading and trailing whitespace from a query execution id.
+ *
+ * Internal spaces are kept. Callers still reject the result when it is empty.
+ *
+ * @param queryExecutionId - Athena query execution identifier candidate.
+ * @returns The id with surrounding whitespace removed.
+ */
+export const normalizeQueryExecutionId = (queryExecutionId: string): string =>
+  queryExecutionId.trim();
+
+/**
  * Reports whether `queryExecutionId` is empty or whitespace only.
  *
  * @param queryExecutionId - Athena query execution identifier candidate.
- * @returns `true` when the trimmed id is empty.
+ * @returns `true` when {@link normalizeQueryExecutionId} is empty.
  */
 export const isBlankQueryExecutionId = (queryExecutionId: string): boolean =>
-  queryExecutionId.trim() === '';
+  normalizeQueryExecutionId(queryExecutionId) === '';

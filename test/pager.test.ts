@@ -161,6 +161,36 @@ describe('AthenaQueryResultPager', () => {
       expect(client.send).not.toHaveBeenCalled();
     });
 
+    it('should send the trimmed queryExecutionId', async () => {
+      const send = jest.fn().mockResolvedValue({
+        ResultSet: createMockResultSet([]),
+        NextToken: undefined,
+      });
+      const client = { send } as unknown as AthenaClient;
+
+      await new AthenaQueryResultPager(client).forExecution('  exec-1 \n').fetchPage();
+
+      expect(send.mock.calls[0][0].input.QueryExecutionId).toBe('exec-1');
+    });
+
+    it('should trim queryExecutionId passed to AthenaQueryExecutionPager.create', async () => {
+      const send = jest.fn().mockResolvedValue({
+        ResultSet: createMockResultSet([]),
+        NextToken: undefined,
+      });
+      const client = { send } as unknown as AthenaClient;
+      const execution = AthenaQueryExecutionPager.create(
+        client,
+        { maxResults: 1000, queryResultType: QueryResultType.DATA_ROWS },
+        undefined,
+        ' exec-1 ',
+      );
+
+      await execution.fetchPage();
+
+      expect(send.mock.calls[0][0].input.QueryExecutionId).toBe('exec-1');
+    });
+
     it('should reject blank queryExecutionId from AthenaQueryExecutionPager.create', () => {
       const client = { send: jest.fn() } as unknown as AthenaClient;
 
