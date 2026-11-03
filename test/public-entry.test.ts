@@ -12,6 +12,7 @@ const RUNTIME_EXPORTS = [
   'AthenaQueryResultPagerEmptyQueryExecutionIdError',
   'AthenaQueryResultPagerError',
   'AthenaQueryResultPagerInvalidMaxResultsError',
+  'AthenaQueryResultParserArgumentError',
   'AthenaQueryResultParserColumnCountMismatchError',
   'AthenaQueryResultParserDuplicateColumnNameError',
   'AthenaQueryResultParserError',
