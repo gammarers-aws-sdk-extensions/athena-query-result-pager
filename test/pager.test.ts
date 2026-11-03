@@ -720,12 +720,172 @@ describe('AthenaQueryResultPager', () => {
 
   describe('hasNextPage', () => {
     it('should return true when nextToken is defined', () => {
-      expect(AthenaQueryResultPager.hasNextPage({ rows: [], nextToken: 'x', rowCount: 0 })).toBe(true);
+      expect(AthenaQueryResultPager.hasNextPage({
+        rows: [],
+        nextToken: 'x',
+        rowCount: 0,
+        pageIndex: 0,
+        cumulativeRowCount: 0,
+      })).toBe(true);
     });
 
     it('should return false when nextToken is undefined', () => {
-      expect(AthenaQueryResultPager.hasNextPage({ rows: [], rowCount: 0 })).toBe(false);
-      expect(AthenaQueryResultPager.hasNextPage({ rows: [], nextToken: undefined, rowCount: 0 })).toBe(false);
+      expect(AthenaQueryResultPager.hasNextPage({
+        rows: [],
+        rowCount: 0,
+        pageIndex: 0,
+        cumulativeRowCount: 0,
+      })).toBe(false);
+      expect(AthenaQueryResultPager.hasNextPage({
+        rows: [],
+        nextToken: undefined,
+        rowCount: 0,
+        pageIndex: 0,
+        cumulativeRowCount: 0,
+      })).toBe(false);
+    });
+  });
+
+  describe('page position', () => {
+    it('should number fetchPage results in call order and sum parsed rows', async () => {
+      const send = createMockSend([
+        { rows: [{ id: '1' }, { id: '2' }], nextToken: 't2' },
+        { rows: [{ id: '3' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+
+      const page1 = await execution.fetchPage();
+      const page2 = await execution.fetchPage(page1.nextToken);
+
+      expect(page1.pageIndex).toBe(0);
+      expect(page1.rowCount).toBe(2);
+      expect(page1.cumulativeRowCount).toBe(2);
+      expect(page2.pageIndex).toBe(1);
+      expect(page2.rowCount).toBe(1);
+      expect(page2.cumulativeRowCount).toBe(3);
+    });
+
+    it('should keep one counter across fetchPageDetailed and fetchPageWith', async () => {
+      const send = createMockSend([
+        { rows: [{ id: '1' }], nextToken: 't2' },
+        { rows: [{ id: '2' }, { id: '3' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+
+      const detailed = await execution.fetchPageDetailed();
+      const mapped = await execution.fetchPageWith((row: ParsedRow) => row, detailed.nextToken);
+
+      expect(detailed.pageIndex).toBe(0);
+      expect(detailed.cumulativeRowCount).toBe(detailed.rowCount);
+      expect(mapped.pageIndex).toBe(1);
+      expect(mapped.rowCount).toBe(2);
+      expect(mapped.cumulativeRowCount).toBe(detailed.rowCount + mapped.rowCount);
+    });
+
+    it('should assign pageIndex and cumulativeRowCount while iterating pages', async () => {
+      const send = createMockSend([
+        { rows: [{ id: '1' }], nextToken: 't2' },
+        { rows: [{ id: '2' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+      const pages: Array<{ pageIndex: number; rowCount: number; cumulativeRowCount: number }> = [];
+
+      for await (const page of execution.iteratePages()) {
+        pages.push({
+          pageIndex: page.pageIndex,
+          rowCount: page.rowCount,
+          cumulativeRowCount: page.cumulativeRowCount,
+        });
+      }
+
+      expect(pages).toEqual([
+        { pageIndex: 0, rowCount: 1, cumulativeRowCount: 1 },
+        { pageIndex: 1, rowCount: 1, cumulativeRowCount: 2 },
+      ]);
+    });
+
+    it('should advance the same counters when iterateRows reads pages', async () => {
+      const send = createMockSend([
+        { rows: [{ id: '1' }], nextToken: 't2' },
+        { rows: [{ id: '2' }], nextToken: undefined },
+        { rows: [{ id: '3' }], nextToken: undefined },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+      const rows: ParsedRow[] = [];
+
+      for await (const row of execution.iterateRows()) {
+        rows.push(row);
+      }
+
+      const page = await execution.fetchPage();
+
+      expect(rows).toEqual([{ id: '1' }, { id: '2' }]);
+      expect(page.pageIndex).toBe(2);
+      expect(page.cumulativeRowCount).toBe(rows.length + page.rowCount);
+    });
+
+    it('should count repeated fetches in call order', async () => {
+      const send = createMockSend([
+        { rows: [{ id: '1' }], nextToken: 't2' },
+        { rows: [{ id: '1' }], nextToken: 't2' },
+      ]);
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+
+      const first = await execution.fetchPage();
+      const second = await execution.fetchPage();
+
+      expect(first.pageIndex).toBe(0);
+      expect(second.pageIndex).toBe(1);
+      expect(second.cumulativeRowCount).toBe(first.rowCount + second.rowCount);
+    });
+
+    it('should reset pageIndex and cumulativeRowCount with the parser', async () => {
+      const send = jest.fn().mockResolvedValue({
+        ResultSet: createMockResultSet([{ id: 'id' }, { id: '1' }]),
+        NextToken: undefined,
+      });
+      const client = { send } as unknown as AthenaClient;
+      const execution = new AthenaQueryResultPager(client).forExecution('exec-1');
+
+      const page1 = await execution.fetchPage();
+      expect(page1.pageIndex).toBe(0);
+      expect(page1.cumulativeRowCount).toBe(1);
+
+      execution.reset();
+
+      const page2 = await execution.fetchPage();
+      expect(page2.pageIndex).toBe(0);
+      expect(page2.cumulativeRowCount).toBe(1);
+      expect(execution.getLastHeaderRowDecision()).not.toBeNull();
+    });
+
+    it('should keep page counters independent across forExecution handles', async () => {
+      const send = jest.fn().mockImplementation((command: GetQueryResultsCommand) => {
+        const rows = command.input.QueryExecutionId === 'exec-1'
+          ? [{ a: 'a' }, { a: '1' }, { a: '2' }]
+          : [{ b: 'b' }, { b: '3' }];
+        return Promise.resolve({
+          ResultSet: createMockResultSet(rows),
+          NextToken: undefined,
+        });
+      });
+      const client = { send } as unknown as AthenaClient;
+      const pager = new AthenaQueryResultPager(client);
+
+      const [page1, page2] = await Promise.all([
+        pager.forExecution('exec-1').fetchPage(),
+        pager.forExecution('exec-2').fetchPage(),
+      ]);
+
+      expect(page1.pageIndex).toBe(0);
+      expect(page1.cumulativeRowCount).toBe(2);
+      expect(page2.pageIndex).toBe(0);
+      expect(page2.cumulativeRowCount).toBe(1);
     });
   });
 

@@ -37,6 +37,17 @@ export interface PageResult<T> {
   nextToken?: string;
   /** Same as `rows.length` for convenience. */
   rowCount: number;
+  /**
+   * Zero-based index of this page among pages this handle has returned since construction
+   * or {@link AthenaQueryExecutionPager.reset}.
+   * The index follows call order on that handle, not the Athena continuation token.
+   */
+  pageIndex: number;
+  /**
+   * Parsed rows returned by this handle through this page, including {@link PageResult.rowCount}.
+   * Counted since construction or {@link AthenaQueryExecutionPager.reset}.
+   */
+  cumulativeRowCount: number;
 }
 
 /**
@@ -270,6 +281,10 @@ export class AthenaQueryExecutionPager {
   private readonly parser: AthenaQueryResultParser;
   /** True while a fetch or iteration holds exclusive access to this handle. */
   private inFlight = false;
+  /** Pages successfully returned since construction or {@link AthenaQueryExecutionPager.reset}. The next page uses this as {@link PageResult.pageIndex}. */
+  private fetchedPageCount = 0;
+  /** Sum of parsed {@link PageResult.rowCount} values returned since construction or {@link AthenaQueryExecutionPager.reset}. */
+  private cumulativeRowCount = 0;
 
   /**
    * @param client - SDK v3 `AthenaClient` used to call `GetQueryResults`.
@@ -396,11 +411,11 @@ export class AthenaQueryExecutionPager {
 
     ensureNotAborted(abortSignal);
 
-    return {
+    return this.withPagePosition({
       rows,
       nextToken: response.NextToken,
       rowCount: rows.length,
-    };
+    });
   };
 
   /**
@@ -420,12 +435,12 @@ export class AthenaQueryExecutionPager {
 
     ensureNotAborted(abortSignal);
 
-    return {
+    return this.withPagePosition({
       rows: parsed.rows,
       nextToken: response.NextToken,
       rowCount: parsed.rows.length,
       diagnostics: parsed.diagnostics,
-    };
+    });
   };
 
   /**
@@ -452,10 +467,34 @@ export class AthenaQueryExecutionPager {
 
     ensureNotAborted(abortSignal);
 
-    return {
+    return this.withPagePosition({
       rows,
       nextToken: response.NextToken,
       rowCount: rows.length,
+    });
+  };
+
+  /**
+   * Records a successfully parsed page on this handle.
+   *
+   * Failed or aborted fetches do not call this, so their rows are not part of the running totals.
+   *
+   * @typeParam T - Row type held in the page.
+   * @typeParam TPage - Page payload without position fields. Extra fields such as diagnostics are kept.
+   * @param page - Parsed page for this response only.
+   * @returns The same page plus {@link PageResult.pageIndex} and {@link PageResult.cumulativeRowCount}.
+   */
+  private readonly withPagePosition = <T, TPage extends Omit<PageResult<T>, 'pageIndex' | 'cumulativeRowCount'>>(
+    page: TPage,
+  ): TPage & Pick<PageResult<T>, 'pageIndex' | 'cumulativeRowCount'> => {
+    const pageIndex = this.fetchedPageCount;
+    this.fetchedPageCount += 1;
+    this.cumulativeRowCount += page.rowCount;
+
+    return {
+      ...page,
+      pageIndex,
+      cumulativeRowCount: this.cumulativeRowCount,
     };
   };
 
@@ -685,13 +724,16 @@ export class AthenaQueryExecutionPager {
     this.parser.getLastHeaderRowDecision();
 
   /**
-   * Clears this handle's {@link AthenaQueryResultParser} state.
+   * Clears this handle's {@link AthenaQueryResultParser} state and page counters.
    *
-   * Call when you need to clear header-row bookkeeping without starting a new fetch
-   * (for example so {@link AthenaQueryExecutionPager.getLastHeaderRowDecision} returns `null`).
+   * After this call, {@link AthenaQueryExecutionPager.getLastHeaderRowDecision} returns `null`,
+   * and the next successful page is {@link PageResult.pageIndex} `0` with a fresh
+   * {@link PageResult.cumulativeRowCount}.
    * Prefer a new {@link AthenaQueryResultPager.forExecution} handle for a different query.
    */
   readonly reset = (): void => {
     this.parser.reset();
+    this.fetchedPageCount = 0;
+    this.cumulativeRowCount = 0;
   };
 }

@@ -15,6 +15,7 @@ Paginate [AWS Athena](https://docs.aws.amazon.com/athena/latest/ug/v3-sdk.html) 
 - Paired page and row APIs for raw **`ParsedRow`** or custom **`RowParser<T>`** (`fetchPage` / `fetchPageWith`, `fetchPageDetailed`, `iteratePages*` / `iterateRows`).
 - Async generators walk pages or rows without holding the full result set in memory.
 - Stops a long page walk when the caller aborts an **`AbortSignal`**: the in-flight **`GetQueryResults`** is cancelled and no further page is requested. Cancellation throws **`AthenaQueryResultPagerAbortError`**.
+- Reports **`pageIndex`** (zero-based) and **`cumulativeRowCount`** on each page for that execution handle, in the order of successful fetches since creation or **`reset()`**.
 - Fail-fast typed errors for invalid **`maxResults`** and empty **`queryExecutionId`**.
 - Re-exports **`QueryResultType`**, parser types, parser errors, and parser utilities from the package entry point.
 - Compared with the SDK’s [`paginateGetQueryResults`](https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/Package/-aws-sdk-client-athena/Function/paginateGetQueryResults/): this package returns parsed rows (and optional typed mapping) instead of raw SDK page objects.
@@ -73,7 +74,7 @@ const execution = pager.forExecution('query-execution-id');
 
 ```ts
 const page = await execution.fetchPage();
-console.log(page.rows, page.nextToken, page.rowCount);
+console.log(page.rows, page.nextToken, page.rowCount, page.pageIndex, page.cumulativeRowCount);
 
 if (AthenaQueryResultPager.hasNextPage(page)) {
   const nextPage = await execution.fetchPage({ nextToken: page.nextToken });
@@ -85,6 +86,8 @@ console.log(detailed.diagnostics.headerRowDecision, detailed.diagnostics.rawRowC
 ```
 
 `execution.fetchPage(page.nextToken)` still works. Prefer `{ nextToken }` when you also pass `abortSignal`.
+
+`pageIndex` starts at `0` for the first page this handle returns. `cumulativeRowCount` is the sum of `rowCount` through that page. Both follow call order, including pages read by `iterateRows`, and `reset()` sets them back to `0`.
 
 ### Custom row parser
 
