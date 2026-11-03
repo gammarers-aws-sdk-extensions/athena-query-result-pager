@@ -11,7 +11,7 @@ const project = new ProjenTypeScriptProject({
     'athena-query-result-parser@^0.7.0',
   ],
   devDeps: [
-    '@gammarers/projen-projects@^0.5.8',
+    '@gammarers/projen-projects@^0.6.3',
   ],
   releaseToNpm: true,
   npmTrustedPublishing: true,
