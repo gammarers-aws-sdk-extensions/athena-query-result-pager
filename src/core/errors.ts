@@ -2,6 +2,8 @@ import { MAX_MAX_RESULTS, MIN_MAX_RESULTS } from './consts';
 
 const EMPTY_QUERY_EXECUTION_ID_MESSAGE = 'queryExecutionId must be a non-empty string';
 
+const ABORTED_MESSAGE = 'paging was aborted';
+
 const CONCURRENT_ACCESS_MESSAGE =
   'concurrent fetch or iteration is not allowed on the same AthenaQueryExecutionPager';
 
@@ -32,8 +34,32 @@ export abstract class AthenaQueryResultPagerError extends Error {
 }
 
 /**
+ * Thrown when paging is cancelled through an {@link AbortSignal}.
+ *
+ * {@link Error.cause} is the SDK rejection when abortion interrupts a `GetQueryResults`
+ * call already in flight. It is absent when the signal was already aborted before the call.
+ */
+export class AthenaQueryResultPagerAbortError extends AthenaQueryResultPagerError {
+  override readonly name: string = 'AthenaQueryResultPagerAbortError';
+  readonly code = 'aborted' as const;
+
+  /**
+   * SDK rejection when abortion interrupts a request already in flight.
+   * Absent when the signal was already aborted before the call.
+   */
+  readonly cause?: unknown;
+
+  constructor(cause?: unknown) {
+    super(ABORTED_MESSAGE);
+    this.cause = cause;
+    Object.setPrototypeOf(this, AthenaQueryResultPagerAbortError.prototype);
+  }
+}
+
+/**
  * Thrown when `queryExecutionId` is empty or whitespace only
  * (for example on {@link AthenaQueryResultPager.forExecution}).
+ * A non-blank id is stored with leading and trailing whitespace removed.
  */
 export class AthenaQueryResultPagerEmptyQueryExecutionIdError extends AthenaQueryResultPagerError {
   override readonly name: string = 'AthenaQueryResultPagerEmptyQueryExecutionIdError';

@@ -1,12 +1,15 @@
 export {
   AthenaQueryExecutionPager,
   AthenaQueryResultPager,
+  type FetchPageOptions,
   type PageDetailedResult,
   type PageResult,
+  type PagerAbortOptions,
   type PagerOptions,
 } from './pager';
 
 export {
+  AthenaQueryResultPagerAbortError,
   AthenaQueryResultPagerConcurrentAccessError,
   AthenaQueryResultPagerEmptyQueryExecutionIdError,
   AthenaQueryResultPagerError,
@@ -16,6 +19,7 @@ export {
 /** Re-exports {@link QueryResultType} from `@aws-sdk/client-athena`. */
 export { QueryResultType } from '@aws-sdk/client-athena';
 export {
+  AthenaQueryResultParserArgumentError,
   AthenaQueryResultParserColumnCountMismatchError,
   AthenaQueryResultParserDuplicateColumnNameError,
   AthenaQueryResultParserError,
@@ -41,6 +45,7 @@ export type {
   AthenaQueryResultParserOptions,
   AthenaTypedValue,
   ColumnCountMismatchBehavior,
+  DateValueKind,
   HeaderRowDecision,
   MaxRowsExceededBehavior,
   ParseResultSetDiagnostics,
@@ -50,6 +55,7 @@ export type {
   ParsedRow,
   ParserReusePolicy,
   RowParser,
+  ToDateOptions,
   TypedParsedRow,
   UnavailableResultBehavior,
   UnparseableValueBehavior,

@@ -5,7 +5,7 @@
 [![Node.js](https://img.shields.io/node/v/athena-query-result-pager?style=flat-square)](https://www.npmjs.com/package/athena-query-result-pager)
 [![build](https://img.shields.io/github/actions/workflow/status/gammarers-aws-sdk-extensions/athena-query-result-pager/build.yml?label=build&style=flat-square)](https://github.com/gammarers-aws-sdk-extensions/athena-query-result-pager/actions/workflows/build.yml)
 
-Paginate [AWS Athena](https://docs.aws.amazon.com/athena/latest/ug/v3-sdk.html) **`GetQueryResults`** calls with AWS SDK v3. This library walks **`NextToken`**, parses tabular rows with [athena-query-result-parser](https://www.npmjs.com/package/athena-query-result-parser) (0.7+), and forwards **`MaxResults`**, **`QueryResultType`**, and optional **`ParseResultSetOptions`** from **`PagerOptions`** on every page fetch.
+Paginate [AWS Athena](https://docs.aws.amazon.com/athena/latest/ug/v3-sdk.html) **`GetQueryResults`** calls with AWS SDK v3. This library walks **`NextToken`**, parses tabular rows with [athena-query-result-parser](https://www.npmjs.com/package/athena-query-result-parser) (0.8+), and forwards **`MaxResults`**, **`QueryResultType`**, and optional **`ParseResultSetOptions`** from **`PagerOptions`** on every page fetch.
 
 ## Features
 
@@ -14,6 +14,8 @@ Paginate [AWS Athena](https://docs.aws.amazon.com/athena/latest/ug/v3-sdk.html) 
 - Forwards **`QueryResultType`** and **`parseResultSetOptions`** on every request / parse (including **`QueryResultType.DATA_MANIFEST`** when Athena supports it).
 - Paired page and row APIs for raw **`ParsedRow`** or custom **`RowParser<T>`** (`fetchPage` / `fetchPageWith`, `fetchPageDetailed`, `iteratePages*` / `iterateRows`).
 - Async generators walk pages or rows without holding the full result set in memory.
+- Stops a long page walk when the caller aborts an **`AbortSignal`**: the in-flight **`GetQueryResults`** is cancelled and no further page is requested. Cancellation throws **`AthenaQueryResultPagerAbortError`**.
+- Reports **`pageIndex`** (zero-based) and **`cumulativeRowCount`** on each page for that execution handle, in the order of successful fetches since creation or **`reset()`**.
 - Fail-fast typed errors for invalid **`maxResults`** and empty **`queryExecutionId`**.
 - Re-exports **`QueryResultType`**, parser types, parser errors, and parser utilities from the package entry point.
 - Compared with the SDK’s [`paginateGetQueryResults`](https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/Package/-aws-sdk-client-athena/Function/paginateGetQueryResults/): this package returns parsed rows (and optional typed mapping) instead of raw SDK page objects.
@@ -22,7 +24,7 @@ Paginate [AWS Athena](https://docs.aws.amazon.com/athena/latest/ug/v3-sdk.html) 
 
 1. Construct **`AthenaQueryResultPager`** with an **`AthenaClient`** and optional **`PagerOptions`**.
 2. Call **`forExecution(queryExecutionId)`** to get an **`AthenaQueryExecutionPager`** with its own parser state.
-3. Use **`fetchPage`** / **`fetchPageWith`** / **`fetchPageDetailed`** or the **`iteratePages*`** / **`iterateRows`** generators on that handle; pass **`nextToken`** from the previous page when paging manually.
+3. Use **`fetchPage`** / **`fetchPageWith`** / **`fetchPageDetailed`** or the **`iteratePages*`** / **`iterateRows`** generators on that handle; pass **`nextToken`** from the previous page when paging manually. Pass **`abortSignal`** on those calls when the walk should be cancellable.
 4. The library does not start queries or wait for completion — wait until the execution succeeds before paging.
 
 ## Installation
@@ -45,7 +47,7 @@ yarn add athena-query-result-pager
 pnpm add athena-query-result-pager
 ```
 
-Runtime dependencies: `@aws-sdk/client-athena`, `athena-query-result-parser` **`^0.7.0`**. Your application typically already instantiates **`AthenaClient`** with credentials and Region.
+Runtime dependencies: `@aws-sdk/client-athena`, `athena-query-result-parser` **`^0.8.0`**. Your application typically already instantiates **`AthenaClient`** with credentials and Region.
 
 ## Usage
 
@@ -72,16 +74,20 @@ const execution = pager.forExecution('query-execution-id');
 
 ```ts
 const page = await execution.fetchPage();
-console.log(page.rows, page.nextToken, page.rowCount);
+console.log(page.rows, page.nextToken, page.rowCount, page.pageIndex, page.cumulativeRowCount);
 
 if (AthenaQueryResultPager.hasNextPage(page)) {
-  const nextPage = await execution.fetchPage(page.nextToken);
+  const nextPage = await execution.fetchPage({ nextToken: page.nextToken });
   // ...
 }
 
 const detailed = await execution.fetchPageDetailed();
 console.log(detailed.diagnostics.headerRowDecision, detailed.diagnostics.rawRowCount);
 ```
+
+`execution.fetchPage(page.nextToken)` still works. Prefer `{ nextToken }` when you also pass `abortSignal`.
+
+`pageIndex` starts at `0` for the first page this handle returns. `cumulativeRowCount` is the sum of `rowCount` through that page. Both follow call order, including pages read by `iterateRows`, and `reset()` sets them back to `0`.
 
 ### Custom row parser
 
@@ -124,6 +130,29 @@ for await (const row of execution.iterateRows(rowParser)) {
 }
 ```
 
+### Cancel paging
+
+Pass `abortSignal` to stop an in-flight `GetQueryResults` and to skip later pages or rows. An aborted call throws `AthenaQueryResultPagerAbortError`.
+
+```ts
+import { AthenaQueryResultPagerAbortError } from 'athena-query-result-pager';
+
+const controller = new AbortController();
+
+try {
+  for await (const page of execution.iteratePages({ abortSignal: controller.signal })) {
+    console.log(page.rowCount);
+    controller.abort();
+  }
+} catch (error) {
+  if (error instanceof AthenaQueryResultPagerAbortError) {
+    console.log(error.code);
+  }
+}
+```
+
+`fetchPage({ nextToken, abortSignal })` and `iterateRows(rowParser, { abortSignal })` take the same signal.
+
 ### Header-row decision and reset
 
 ```ts
@@ -151,9 +180,10 @@ await pending;
 
 - **Query not finished yet** — Wait until **`GetQueryExecution`** reports a terminal state such as **`SUCCEEDED`** before paging.
 - **Throttling and transient API errors** — Configure retry on **`AthenaClient`** or at the call site; this package does not add Athena-specific backoff.
+- **Cancelling a long walk** — Pass **`abortSignal`**. This package does not impose a wall-clock timeout. Throttling retries stay on **`AthenaClient`**.
 - **Failed / cancelled queries** — Check execution state before or when catching failures; the pager assumes a completed execution that can return result pages.
 
-AWS SDK errors and parser errors from **`athena-query-result-parser`** are propagated unchanged (not wrapped in pager errors).
+AWS SDK errors and parser errors from **`athena-query-result-parser`** propagate unchanged. Aborting **`abortSignal`** reports **`AthenaQueryResultPagerAbortError`**. When a request was already in flight, **`cause`** is the SDK error.
 
 ## Options
 
@@ -163,13 +193,22 @@ AWS SDK errors and parser errors from **`athena-query-result-parser`** are propa
 | `queryResultType` | `QueryResultType` | `QueryResultType.DATA_ROWS` | Forwarded on every `GetQueryResults` call. Import from this package (re-exported from `@aws-sdk/client-athena`). |
 | `parseResultSetOptions` | `ParseResultSetOptions` | parser defaults | Forwarded to every parse on execution handles (`skipHeaderRow`, `columnCountMismatchBehavior`, `maxRows`, …). |
 
-**`forExecution(queryExecutionId)`** throws **`AthenaQueryResultPagerEmptyQueryExecutionIdError`** when the id is empty or whitespace-only.
+**`forExecution(queryExecutionId)`** removes leading and trailing whitespace before the id is sent. It throws **`AthenaQueryResultPagerEmptyQueryExecutionIdError`** when the id is empty or whitespace-only.
+
+### Per-call options
+
+`fetchPage`, `fetchPageDetailed`, and `fetchPageWith` take **`FetchPageOptions`**. `iteratePages`, `iteratePagesDetailed`, `iteratePagesWith`, and `iterateRows` take **`PagerAbortOptions`**. Positional `nextToken` and `rowParser` arguments still work.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `abortSignal` | `AbortSignal` | omitted | Cancels the in-flight `GetQueryResults` and stops later pages or rows. Throws **`AthenaQueryResultPagerAbortError`**. |
+| `nextToken` | `string` | omitted | **`FetchPageOptions`** only. Continuation token from the previous page. |
 
 ## Requirements
 
 - Node.js **`>= 20.0.0`**
 - **`@aws-sdk/client-athena`** — provide **`AthenaClient`**; **`QueryResultType`** is also re-exported by this package
-- **`athena-query-result-parser`** **`^0.7.0`**
+- **`athena-query-result-parser`** **`^0.8.0`**
 
 ## License
 
